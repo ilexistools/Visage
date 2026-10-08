@@ -84,7 +84,7 @@ test('incomplete workflows save with warnings; structural errors are rejected', 
   const saved = await server.call('PUT', '/api/projects/partial/workflow', { source })
   assert.equal(saved.status, 200)
   assert.ok(saved.data.warnings.includes('Workflow needs a terminal node'))
-  for (const node of [{ on_fail: 'nope' }, { max_attempts: 0 }, { evaluation: { type: 'nope' } }, { evaluation: { type: 'choice', options: ['a'] } }, { evaluation: 'predicate' }, { next: [{ goto: 'a', when: 'bad expression' }] }]) {
+  for (const node of [{ on_fail: 'nope' }, { max_attempts: 0 }, { evaluation: { type: 'nope' } }, { evaluation: { type: 'choice', options: ['a', ''] } }, { evaluation: 'predicate' }, { next: [{ goto: 'a', when: 'bad expression' }] }]) {
     const bad = yaml.dump({ version: 1, start: 'a', nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, ...node } } })
     assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: bad })).status, 400, JSON.stringify(node))
   }
@@ -98,6 +98,11 @@ test('incomplete workflows save with warnings; structural errors are rejected', 
   assert.ok(warnings.includes('Node a: output_schema is no longer used; choose a predicate, choice or score evaluation'), warnings)
   assert.ok(warnings.includes('Node a: no arc for result false'), warnings)
   assert.ok(warnings.includes('Node b: arcs after the unconditional arc to c are never used'), warnings)
+  const unfinishedChoice = yaml.dump({ version: 1, start: 'a', nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, evaluation: { type: 'choice', options: [] }, next: [{ goto: 'c' }] }, c: { type: 'skill', terminal: true } } })
+  const saved2 = await server.call('PUT', '/api/projects/partial/workflow', { source: unfinishedChoice })
+  assert.equal(saved2.status, 200, 'a new choice without options can be saved')
+  assert.ok(saved2.data.warnings.includes('Node a: a choice evaluation needs at least two options'))
+  assert.equal((await server.call('GET', '/api/projects/partial/validate')).data.ready, false)
   const terminalEvaluation = yaml.dump({ version: 1, start: 'c', nodes: { c: { type: 'skill', terminal: true, evaluation: { type: 'predicate' } } } })
   assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: terminalEvaluation })).status, 400)
 })

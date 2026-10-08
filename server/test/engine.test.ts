@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { contractFor, decide, evaluate, evaluationProblem, matches, newStateData, parseOutput, uncoveredResults, validateSchema, type RunState, type Workflow } from '../src/engine.ts'
+import { contractFor, decide, evaluate, evaluationProblem, evaluationReadiness, matches, newStateData, parseOutput, uncoveredResults, validateSchema, type RunState, type Workflow } from '../src/engine.ts'
 import { SCHEMA } from './helpers.ts'
 
 const state = (): RunState => ({ data: newStateData({}), attempts: {}, retries: {}, steps: 0 })
@@ -43,7 +43,9 @@ test('evaluation types define the result each step must return', () => {
   assert.deepEqual(evaluate({ evaluation: { type: 'score' } }, { result: 1.2 }), ['output.result must be <= 1'])
   assert.deepEqual(evaluate({ evaluation: { type: 'score' } }, { text: 'no json' }), ['output.result is required'])
   assert.deepEqual(evaluate({}, { anything: 1 }), [])
-  assert.equal(evaluationProblem({ type: 'choice', options: ['only'] }), 'a choice evaluation needs at least two options')
+  assert.equal(evaluationProblem({ type: 'choice', options: ['only'] }), null, 'an unfinished choice can be saved')
+  assert.equal(evaluationReadiness({ type: 'choice', options: ['only'] }), 'a choice evaluation needs at least two options')
+  assert.equal(evaluationProblem({ type: 'choice', options: [''] }), 'choice options must be non-empty text')
   assert.equal(evaluationProblem({ type: 'score', options: ['a', 'b'] }), 'options are only used by choice evaluations, not score')
   assert.equal(evaluationProblem({ type: 'vote' }), 'evaluation type must be one of predicate, choice, score')
   assert.equal(evaluationProblem({ type: 'choice', options: ['a', 'a'] }), 'choice options must be unique')

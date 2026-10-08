@@ -96,7 +96,7 @@ test('MCP tools build, validate and export a workflow', async () => {
   await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done', when: 'output.result == true' }] })
   assert.ok((await call(client, 'validate_project', { project_id: 'via-mcp' })).warnings.includes('Node write: no arc for result false'))
   await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done' }] })
-  await assert.rejects(call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'write', evaluation: { type: 'choice', options: ['one'] } }), /at least two options/)
+  await assert.rejects(call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'write', evaluation: { type: 'choice', options: ['one', 'one'] } }), /unique/)
   const pinned = (await call(client, 'get_workflow', { project_id: 'via-mcp' })).source.replace('- goto: done', '- goto: done\n        source_handle: bottom-2')
   await call(client, 'put_workflow', { project_id: 'via-mcp', source: pinned })
   await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done', label: 'ok' }] })

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import yaml from 'js-yaml'
-import { evaluationProblem, matches, uncoveredResults, type Workflow, type WorkflowNode } from './engine.ts'
+import { evaluationProblem, evaluationReadiness, matches, uncoveredResults, type Workflow, type WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, inside } from './store.ts'
 
 export function parseWorkflow(source: string): Workflow {
@@ -56,6 +56,8 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
       if (!existsSync(skillPath) || !statSync(skillPath).isFile()) readiness.push(`Skill not found for ${id}: ${skill}`)
     }
     validateEvaluation(id, node, nodes)
+    const unfinished = node.evaluation && evaluationReadiness(node.evaluation)
+    if (unfinished) readiness.push(`Node ${id}: ${unfinished}`)
     if (node.next !== undefined && !Array.isArray(node.next)) fail(`Transitions of ${id} must be a list`)
     for (const transition of node.next ?? []) {
       if (typeof transition !== 'object' || transition === null || typeof transition.goto !== 'string' || !Object.hasOwn(nodes, transition.goto)) fail(`Invalid transition target from ${id}`)

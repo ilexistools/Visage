@@ -7,18 +7,11 @@ export type EvaluationType = 'predicate' | 'choice' | 'score'
 export type Evaluation = { type: EvaluationType; question?: string; options?: string[] }
 export type Transition = { goto: string; when?: string; label?: string; [key: string]: unknown }
 
-export const EVALUATION_KINDS: { value: EvaluationType; label: string; summary: string; question: string }[] = [
-  { value: 'predicate', label: 'Predicate', summary: 'Yes or no', question: 'Does the game pass every acceptance test?' },
-  { value: 'choice', label: 'Choice', summary: 'One option from a list', question: 'Should the draft be approved, revised or rejected?' },
-  { value: 'score', label: 'Score', summary: 'A rate from 0 to 1', question: 'How completely does the result meet the requirements?' },
+export const EVALUATION_KINDS: { value: EvaluationType; label: string; summary: string }[] = [
+  { value: 'predicate', label: 'Predicate', summary: 'Yes or no' },
+  { value: 'choice', label: 'Choice', summary: 'One option from a list' },
+  { value: 'score', label: 'Score', summary: 'A rate from 0 to 1' },
 ]
-export const DEFAULT_OPTIONS = ['approved', 'rejected']
-
-/** The JSON a step must return, shown to the user as an example. */
-export function exampleOutput(evaluation: Evaluation): string {
-  const result = evaluation.type === 'predicate' ? 'true' : evaluation.type === 'choice' ? JSON.stringify(evaluation.options?.[0] ?? 'option') : '0.85'
-  return `{ "result": ${result}, "reason": "…" }`
-}
 
 // --- Arc conditions -------------------------------------------------------------
 

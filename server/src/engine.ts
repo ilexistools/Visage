@@ -175,14 +175,19 @@ export function evaluationProblem(evaluation: unknown): string | null {
   if (!EVALUATION_TYPES.includes(evaluation.type as EvaluationType)) return `evaluation type must be one of ${EVALUATION_TYPES.join(', ')}`
   if (evaluation.question !== undefined && typeof evaluation.question !== 'string') return 'evaluation question must be text'
   if (evaluation.type === 'choice') {
-    const options = evaluation.options
-    if (!Array.isArray(options) || options.length < 2) return 'a choice evaluation needs at least two options'
+    const options = evaluation.options ?? []
+    if (!Array.isArray(options)) return 'choice options must be a list'
     if (options.some(option => typeof option !== 'string' || !option.trim())) return 'choice options must be non-empty text'
     if (new Set(options).size !== options.length) return 'choice options must be unique'
   } else if (evaluation.options !== undefined) {
     return `options are only used by choice evaluations, not ${evaluation.type}`
   }
   return null
+}
+
+/** What an otherwise valid evaluation still needs before the workflow can be exported. */
+export function evaluationReadiness(evaluation: Evaluation): string | null {
+  return evaluation.type === 'choice' && (evaluation.options ?? []).length < 2 ? 'a choice evaluation needs at least two options' : null
 }
 
 /** JSON Schema of the output object for an evaluation. */

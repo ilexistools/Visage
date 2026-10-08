@@ -4,7 +4,7 @@ import Editor from '@monaco-editor/react'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, Magnet, Package, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, Magnet, TriangleAlert, Package, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
 import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
 import { conditionSummary } from './evaluation'
@@ -47,14 +47,14 @@ function FlowNode({ data, selected }: any) {
 const nodeTypes = { vasm: FlowNode }
 
 function FlowEdge(props: EdgeProps) {
-  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle; condition?: string } | undefined
+  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle; condition?: string; question?: string } | undefined
   const ends = { sourceX: props.sourceX, sourceY: props.sourceY, sourcePosition: props.sourcePosition, targetX: props.targetX, targetY: props.targetY, targetPosition: props.targetPosition }
   const [path, labelX, labelY] = data?.lineStyle === 'straight' ? getStraightPath(ends)
     : data?.lineStyle === 'curved' ? getBezierPath({ ...ends, curvature: 0.3 })
     : getSmoothStepPath({ ...ends, offset: 18, ...(data?.ports ? routeCenter(data.ports, { x: props.sourceX, y: props.sourceY }, { x: props.targetX, y: props.targetY }) : {}) })
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} interactionWidth={20} />
-    <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}><InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
+    <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data?.question && <span className="arc-question" title={data.question}>{data.question}</span>}<InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
   </>
 }
 const edgeTypes = { editable: FlowEdge }
@@ -164,6 +164,19 @@ export default function App() {
     } catch (e) { tell(e) } finally { setBusy(false) }
   }
   const pendingSaveRef = useRef<null | (() => Promise<boolean>)>(null)
+  const [appVersion, setAppVersion] = useState('')
+  useEffect(() => { api<{ version?: string }>('/health').then(health => setAppVersion(health.version ?? '')).catch(() => {}) }, [])
+  // Validation warnings are listed on demand instead of popping up after every save.
+  const [warnings, setWarnings] = useState<string[]>([])
+  const [warningsOpen, setWarningsOpen] = useState(false)
+  useEffect(() => {
+    if (!warningsOpen) return
+    const close = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('.warnings-wrap')) setWarningsOpen(false) }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setWarningsOpen(false) }
+    document.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape) }
+  }, [warningsOpen])
   const tell = (value: unknown) => setNotice(value instanceof Error ? value.message : String(value))
   const loadProjects = useCallback(async () => { try { setProjects(await api('/projects')) } catch (e) { tell(e) } }, [])
   useEffect(() => { loadProjects() }, [loadProjects])
@@ -174,7 +187,7 @@ export default function App() {
     try {
       const [result, projectFiles] = await Promise.all([api(`/projects/${id}/workflow`), api(`/projects/${id}/files`)])
       setWorkflow(result.workflow); setSource(result.source); setFiles(projectFiles); setProjectId(id); setSelectedNode(null); setDirty(false); setYamlDirty(false); setMobileProjectOpen(false); setSkillEditorOpen(false); setSkillDirty(false)
-      setNotice(result.warnings?.join(' · ') || '')
+      setWarnings(result.warnings ?? []); setWarningsOpen(false); setNotice('')
     } catch (e) { tell(e) }
   }, [])
   useEffect(() => {
@@ -200,7 +213,7 @@ export default function App() {
       },
     }))
     const mappedEdges: Edge[] = Object.entries(workflow.nodes || {}).flatMap(([id, node]) => (node.terminal ? [] : node.next || []).flatMap((next: any, index: number) => !ports[edgeId(id, next.goto, index)] ? [] : [{
-      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, condition: conditionSummary(next.when, node.evaluation), onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
+      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, condition: conditionSummary(next.when, node.evaluation), question: node.evaluation?.question, onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
       markerEnd: { type: MarkerType.Arrow, color: '#667b99', width: 14, height: 14 },
       style: { stroke: '#667b99', strokeWidth: 2.2 }, labelStyle: { fill: '#64748b', fontSize: 11 },
     }]))
@@ -359,7 +372,7 @@ export default function App() {
       const result = await put(`/projects/${projectId}/workflow`, { source: text })
       if (workflowSignatureRef.current === snapshotSignature) {
         setWorkflow(result.workflow); setSource(text); setDirty(false); setYamlDirty(false)
-        if (result.warnings?.length) setNotice(result.warnings.join(' · '))
+        setWarnings(result.warnings ?? [])
       }
       return true
     } catch (e) { tell(e); return false } finally { setBusy(false) }
@@ -495,8 +508,8 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong></div>
-      <div className="top-actions"><button className="button subtle icon-button" data-tooltip="Export plugin" aria-label="Export plugin" onClick={exportPlugin} disabled={!projectId || busy}><Package size={15} /></button></div>
+      <div className="brand"><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion && <span className="app-version" title={`Visage ${appVersion}`}>v{appVersion}</span>}</div>
+      <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<button className="button subtle icon-button" data-tooltip="Export plugin" aria-label="Export plugin" onClick={exportPlugin} disabled={!projectId || busy}><Package size={15} /></button></div>
     </header>
 
     <div className="workspace" style={{ '--left-panel-width': `${explorerWidth}px`, '--right-panel-width': `${selected && !inspectorCollapsed ? inspectorWidth : 0}px` } as React.CSSProperties}>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { CircleCheck, Gauge, ListChecks, Minus, Plus, X } from 'lucide-react'
 import {
-  conditionToWhen, DEFAULT_OPTIONS, dropOption, EVALUATION_KINDS, exampleOutput, orderArcs, parseCondition, renameOption, resetResultConditions,
+  conditionToWhen, dropOption, EVALUATION_KINDS, orderArcs, parseCondition, renameOption, resetResultConditions,
   SCORE_OPERATORS, uncovered, type ArcCondition, type Evaluation, type EvaluationType, type ScoreOperator, type Transition,
 } from './evaluation'
 
@@ -23,7 +23,8 @@ const nextKey = () => `o${++counter}`
 
 /** Editable list of choice options; arcs follow renamed options. */
 function ChoiceOptions({ evaluation, next, onChange }: { evaluation: Evaluation; next: Transition[]; onChange: (patch: Patch) => void }) {
-  const toRows = (options: string[]) => options.map(text => ({ key: nextKey(), text, saved: text }))
+  // A new choice shows two empty options to fill in; nothing is suggested.
+  const toRows = (options: string[]) => [...options, ...Array(Math.max(0, 2 - options.length)).fill('')].map(text => ({ key: nextKey(), text, saved: text }))
   const [rows, setRows] = useState(() => toRows(evaluation.options ?? []))
   const lastCommitted = useRef(JSON.stringify(evaluation.options ?? []))
   useEffect(() => {
@@ -36,7 +37,7 @@ function ChoiceOptions({ evaluation, next, onChange }: { evaluation: Evaluation;
   const commit = (list: typeof rows) => {
     setRows(list)
     const options = valid(list)
-    if (options.length < 2 || duplicates(list).length) return
+    if (duplicates(list).length) return
     let arcs = next
     const kept = new Set(options)
     for (const row of list) if (row.saved && row.text.trim() && row.saved !== row.text.trim() && !kept.has(row.saved)) arcs = renameOption(arcs, row.saved, row.text.trim())
@@ -49,10 +50,10 @@ function ChoiceOptions({ evaluation, next, onChange }: { evaluation: Evaluation;
   const dupes = new Set(duplicates(rows))
   return <div className="eval-block">
     {rows.map(row => <div className="eval-card-row" key={row.key}>
-      <input aria-label="Option" placeholder="option" value={row.text} className={dupes.has(row.text.trim()) ? 'invalid' : ''} onChange={event => commit(rows.map(item => item.key === row.key ? { ...item, text: event.target.value } : item))} />
-      <button type="button" className="icon-plain" aria-label={`Remove option ${row.text}`} title="Remove option" disabled={!!row.text.trim() && valid(rows).length <= 2} onClick={() => commit(rows.filter(item => item.key !== row.key))}><X size={13} /></button>
+      <input aria-label="Option" placeholder="Option" value={row.text} className={dupes.has(row.text.trim()) ? 'invalid' : ''} onChange={event => commit(rows.map(item => item.key === row.key ? { ...item, text: event.target.value } : item))} />
+      <button type="button" className="icon-plain" aria-label={`Remove option ${row.text}`} title="Remove option" disabled={rows.length <= 2} onClick={() => commit(rows.filter(item => item.key !== row.key))}><X size={13} /></button>
     </div>)}
-    {valid(rows).length < 2 && <p className="helper field-error">A choice needs at least two options.</p>}
+    {valid(rows).length < 2 && <p className="helper">Add at least two options.</p>}
     {!!dupes.size && <p className="helper field-error">Each option must be different.</p>}
     <div className="eval-actions"><button type="button" className="button eval-add" onClick={() => setRows([...rows, { key: nextKey(), text: '', saved: '' }])}><Plus size={13} />Add option</button></div>
   </div>
@@ -69,7 +70,7 @@ export function EvaluationEditor({ node, nodeId, nodes, onChange }: { node: Node
     const arcs = resetResultConditions(next)
     if (type === 'none') return onChange({ evaluation: undefined, next: arcs })
     const question = evaluation?.question
-    onChange({ evaluation: { type, ...(question ? { question } : {}), ...(type === 'choice' ? { options: DEFAULT_OPTIONS } : {}) }, next: arcs, output_schema: undefined, checks: undefined })
+    onChange({ evaluation: { type, ...(question ? { question } : {}), ...(type === 'choice' ? { options: [] } : {}) }, next: arcs, output_schema: undefined, checks: undefined })
   }
 
   return <fieldset className="field evaluation-field"><legend>Evaluation</legend>
@@ -86,10 +87,9 @@ export function EvaluationEditor({ node, nodeId, nodes, onChange }: { node: Node
     {legacy && <div className="eval-legacy"><p className="helper">This step still has an old output schema or checks, which are no longer used.</p><button type="button" className="link-button" onClick={() => onChange({ output_schema: undefined, checks: undefined })}>Remove them</button></div>}
     {evaluation && kind && <>
       <label className="eval-mini"><span>Question the step answers</span>
-        <textarea rows={2} placeholder={kind.question} value={evaluation.question ?? ''} onChange={event => onChange({ evaluation: { ...evaluation, question: event.target.value || undefined } })} />
+        <textarea rows={2} placeholder="Write the question this step answers" value={evaluation.question ?? ''} onChange={event => onChange({ evaluation: { ...evaluation, question: event.target.value || undefined } })} />
       </label>
       {evaluation.type === 'choice' && <><h3 className="eval-heading">Options</h3><ChoiceOptions evaluation={evaluation} next={next} onChange={onChange} /></>}
-      <div className="eval-mini"><span>The step returns</span><code className="eval-example">{exampleOutput(evaluation)}</code></div>
       <h3 className="eval-heading">If the result is invalid</h3>
       <div className="eval-pair eval-failure">
         <label>Try up to<span className="eval-inline"><input type="number" min={1} max={20} value={node.max_attempts || 1} onChange={event => onChange({ max_attempts: Math.min(20, Math.max(1, Number(event.target.value) || 1)) })} />times</span></label>

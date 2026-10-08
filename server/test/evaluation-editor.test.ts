@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { evaluationProblem, nextNode, uncoveredResults, type WorkflowNode } from '../src/engine.ts'
 import {
-  conditionSummary, conditionToWhen, DEFAULT_OPTIONS, dropOption, orderArcs, parseCondition, renameOption, resetResultConditions, uncovered,
+  conditionSummary, conditionToWhen, dropOption, orderArcs, parseCondition, renameOption, resetResultConditions, uncovered,
   type ArcCondition, type Evaluation, type Transition,
 } from '../../frontend/src/evaluation.ts'
 
@@ -58,6 +58,6 @@ test('changing the type resets result arcs, and renamed options follow their arc
   const arcs: Transition[] = [{ goto: 'a', when: 'output.result == true', label: 'ok' }, { goto: 'b', when: 'state.attempts.x > 2' }]
   assert.deepEqual(resetResultConditions(arcs), [{ goto: 'a', label: 'ok' }, { goto: 'b', when: 'state.attempts.x > 2' }])
   assert.deepEqual(renameOption([{ goto: 'a', when: 'output.result == "changes"' }], 'changes', 'revise'), [{ goto: 'a', when: 'output.result == "revise"' }])
-  assert.equal(evaluationProblem({ type: 'choice', options: DEFAULT_OPTIONS }), null)
+  assert.equal(evaluationProblem({ type: 'choice', options: [] }), null, 'a new choice starts without options')
   assert.deepEqual(dropOption([{ goto: 'a', when: 'output.result == "changes"', label: 'x' }, { goto: 'b', when: 'output.result == "ok"' }], 'changes'), [{ goto: 'a', label: 'x' }, { goto: 'b', when: 'output.result == "ok"' }])
 })
