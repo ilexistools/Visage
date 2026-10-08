@@ -228,8 +228,8 @@ export default function App() {
   const [testsOpen, setTestsOpen] = useState(false)
   // Nodes on the path of the scenario selected in the Tests panel.
   const [highlightedPath, setHighlightedPath] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState('')
-  useEffect(() => { api<{ version?: string }>('/health').then(health => setAppVersion(health.version ?? '')).catch(() => {}) }, [])
+  const [appVersion, setAppVersion] = useState({ version: '', build: '' })
+  useEffect(() => { api<{ version?: string; build?: string }>('/health').then(health => setAppVersion({ version: health.version ?? '', build: health.build ?? '' })).catch(() => {}) }, [])
   // Validation warnings are listed on demand instead of popping up after every save.
   const [warnings, setWarnings] = useState<string[]>([])
   const [warningsOpen, setWarningsOpen] = useState(false)
@@ -590,7 +590,7 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><button className="icon-plain explorer-toggle" aria-label={explorerCollapsed ? 'Show Explorer' : 'Hide Explorer'} aria-pressed={!explorerCollapsed} title={`${explorerCollapsed ? 'Show' : 'Hide'} Explorer (${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}B)`} onClick={toggleExplorer}>{explorerCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion && <span className="app-version" title={`Visage ${appVersion}`}>v{appVersion}</span>}</div>
+      <div className="brand"><button className="icon-plain explorer-toggle" aria-label={explorerCollapsed ? 'Show Explorer' : 'Hide Explorer'} aria-pressed={!explorerCollapsed} title={`${explorerCollapsed ? 'Show' : 'Hide'} Explorer (${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}B)`} onClick={toggleExplorer}>{explorerCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion.version && <span className="app-version" title={`Visage ${appVersion.version}${appVersion.build ? ` · build ${appVersion.build}` : ''}`}>v{appVersion.version}</span>}</div>
       <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<button className="button subtle icon-button" data-tooltip="Tests" aria-label="Tests" aria-pressed={testsOpen} onClick={async () => { if (!testsOpen && (dirty || yamlDirty) && !(await saveWorkflow())) return; setTestsOpen(open => !open) }} disabled={!projectId}><FlaskConical size={15} /></button><div className="export-wrap"><button className="button subtle icon-button" data-tooltip="Export" aria-label="Export" aria-haspopup="menu" aria-expanded={exportMenuOpen} onClick={() => setExportMenuOpen(open => !open)} disabled={!projectId || busy}><Package size={15} /></button>{exportMenuOpen && <div className="project-menu export-menu" role="menu">
         <button role="menuitem" onClick={exportPlugin}><Package size={14} /><span><strong>Plugin</strong><small>Claude Code and Codex (.zip)</small></span></button>
         <button role="menuitem" onClick={exportImage}><ImageIcon size={14} /><span><strong>Image</strong><small>The flow as shown (.png)</small></span></button>

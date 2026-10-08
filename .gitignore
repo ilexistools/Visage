@@ -6,3 +6,4 @@ data/
 server/node_modules/
 server/build/
 server/dist/
+server/src/version.ts

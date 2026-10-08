@@ -13,10 +13,15 @@ import { assetPath } from './assets.ts'
 import { createHttpServer } from './http.ts'
 import { createMcpServer, openBrowser } from './mcp.ts'
 import { dataDir } from './store.ts'
-import { VERSION } from './version.ts'
+import { BUILD, VERSION } from './version.ts'
 
 const HOST = '127.0.0.1'
 const PORT_TRIES = 10
+
+if (process.argv[2] === '--version' || process.argv[2] === 'version') {
+  process.stdout.write(`${VERSION} (${BUILD})\n`)
+  process.exit(0)
+}
 
 // `visage.js conformance ...` runs the harness conformance kit instead of the server.
 if (process.argv[2] === 'conformance') {
@@ -89,7 +94,7 @@ async function ensureEditor(): Promise<string | null> {
 }
 
 async function main(): Promise<void> {
-  log(`Visage ${VERSION}`)
+  log(`Visage ${VERSION} (${BUILD})`)
   const url = values['no-ui'] ? null : await ensureEditor()
   if (url && values.open) openBrowser(url)
   if (values.stdio) {

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
+First tagged release. Version 0.2.0 was only used internally during the move from Python to Node.js and was never released.
+
 ### Changed
 
 - Replaced the Python backend with a single Node.js server (`server/`) that serves the editor, the REST API and MCP (stdio and Streamable HTTP), bundled into one `visage.js` file.
@@ -26,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workflow scenarios (`scenarios.yaml`, Tests panel, `test_workflow` MCP tool) simulate scripted results with the runner's rules; the conformance kit (`visage.js conformance`) runs a probe workflow through Claude Code, Codex or any CLI and audits the run. The runner's `history.jsonl` records every submission.
 - Imported Skill files are listed in the Inspector and can be deleted; the Explorer can be hidden (button or Cmd/Ctrl+B).
 - MCP tools to create, edit, validate and export workflows, and to open the editor.
+- The editor shows the version with the build (commit hash, `-dirty` for uncommitted changes) in its tooltip; `visage.js --version` prints both.
+
+## [0.1.0]
+
+Initial Python version.
 
 ### Added
 
@@ -40,3 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made harness selection a workflow-wide setting shared by every Skill node.
 - Added illustrative text labels to workflow arcs, separate from transition decision conditions.
 - Added an inline Markdown Skill editor and imports for binary or text resources into each Skill folder.
+
+[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ilexistools/Visage/releases/tag/v0.3.0

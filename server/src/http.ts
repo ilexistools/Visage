@@ -9,7 +9,7 @@ import { workflowToMermaid } from './mermaid.ts'
 import { getScenarios, testWorkflow } from './scenarios.ts'
 import * as projects from './projects.ts'
 import { badRequest, dataDir, HttpError, inside, notFound } from './store.ts'
-import { VERSION } from './version.ts'
+import { BUILD, VERSION } from './version.ts'
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 const MAX_BODY = 40_000_000
@@ -111,7 +111,7 @@ async function folderPicker(): Promise<{ path: string }> {
 
 const id = String.raw`([^/]+)`
 const routes: Route[] = [
-  ['GET', /^\/api\/health$/, () => ({ status: 'ok', app: 'visage', version: VERSION, data_dir: dataDir() })],
+  ['GET', /^\/api\/health$/, () => ({ status: 'ok', app: 'visage', version: VERSION, build: BUILD, data_dir: dataDir() })],
   ['GET', /^\/api\/projects$/, () => projects.listProjects()],
   ['POST', /^\/api\/projects$/, async (_, __, body) => projects.createProject(await body() ?? {})],
   ['PUT', new RegExp(`^/api/projects/${id}$`), async (_, [pid], body) => projects.renameProject(pid, (await body())?.name)],

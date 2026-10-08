@@ -134,6 +134,8 @@ cd server && npm test && npm run typecheck   # tests, including documentation ch
 
 Projects are listed in `~/.visage/projects.json`; set `VISAGE_DATA_DIR` to use another folder.
 
+**Releasing**: the version lives in `server/package.json` (keep `frontend/package.json` equal). Bump both with `npm version <x.y.z> --no-git-tag-version`, move the *Unreleased* changelog entries under the new version, commit, then tag `v<x.y.z>`. Builds record the commit hash (`-dirty` when there are uncommitted changes) in the generated `server/src/version.ts`.
+
 ## Security
 
 Visage listens on `127.0.0.1` only and rejects requests from other websites, because its API writes files. Project files stay inside their project folder. Exported workflows run with the permissions of the agent that runs them, so review a workflow's Skills before running it.
@@ -144,4 +146,4 @@ Visage listens on `127.0.0.1` only and rejects requests from other websites, bec
 
 ## Status
 
-Visage is at version 0.2.0 and evolving quickly; the workflow format may still change. See the [changelog](CHANGELOG.md).
+Visage is in early development and evolving quickly; the workflow format may still change. Releases are listed in the [changelog](CHANGELOG.md) and tagged on GitHub. The editor shows its version and build in the top bar (hover the version for the commit).
