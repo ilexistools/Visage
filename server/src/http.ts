@@ -1,12 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, extname, join, sep } from 'node:path'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { exportPlugin } from './exporter.ts'
 import { createMcpServer } from './mcp.ts'
 import * as projects from './projects.ts'
-import { badRequest, HttpError, inside, notFound } from './store.ts'
+import { badRequest, dataDir, HttpError, inside, notFound } from './store.ts'
 import { VERSION } from './version.ts'
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
@@ -47,37 +47,69 @@ function readBody(request: IncomingMessage): Promise<any> {
   })
 }
 
-/** Reject requests whose Host or Origin is not local, which blocks DNS-rebinding attacks from web pages. */
+/**
+ * Accept only requests from this machine's own pages and tools. A non-local Host blocks DNS
+ * rebinding; Origin and Sec-Fetch-Site block other websites (including sandboxed frames, which
+ * send `Origin: null`) from driving the API through the user's browser.
+ */
 function isLocalRequest(request: IncomingMessage): boolean {
   const hostname = (value: string) => { try { return new URL(`http://${value}`).hostname } catch { return '' } }
   if (!LOCAL_HOSTS.has(hostname(request.headers.host ?? ''))) return false
   const origin = request.headers.origin
-  if (origin && origin !== 'null') {
-    try { return LOCAL_HOSTS.has(new URL(origin).hostname) } catch { return false }
+  if (origin !== undefined) {
+    try { if (!LOCAL_HOSTS.has(new URL(origin).hostname)) return false } catch { return false }
   }
-  return true
+  const site = request.headers['sec-fetch-site']
+  return site === undefined || site === 'same-origin' || site === 'none'
 }
 
-function folderPicker(): { path: string } {
+/** Writes must be JSON, which browsers cannot send cross-site without a CORS preflight. */
+function isJsonWrite(request: IncomingMessage): boolean {
+  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return true
+  if (request.headers['content-length'] === '0' || (request.headers['content-length'] === undefined && !request.headers['transfer-encoding'])) return true
+  return (request.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() === 'application/json'
+}
+
+function run(command: string, args: string[]): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    let stdout = ''
+    const timer = setTimeout(() => child.kill(), 180_000)
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.on('error', error => { clearTimeout(timer); reject(error) })
+    child.on('close', status => { clearTimeout(timer); resolve({ status, stdout }) })
+  })
+}
+
+/** Open the native folder chooser without blocking other requests while it is open. */
+async function folderPicker(): Promise<{ path: string }> {
   const prompt = 'Choose a location for the Visage project'
-  let result
-  if (process.platform === 'darwin') {
-    result = spawnSync('osascript', ['-e', `POSIX path of (choose folder with prompt "${prompt}")`], { encoding: 'utf8', timeout: 180_000 })
-  } else if (process.platform === 'win32') {
-    const script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}"
-    result = spawnSync('powershell', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8', timeout: 180_000 })
-  } else {
-    result = spawnSync('zenity', ['--file-selection', '--directory', `--title=${prompt}`], { encoding: 'utf8', timeout: 180_000 })
-    if (result.error) result = spawnSync('kdialog', ['--getexistingdirectory', '.', '--title', prompt], { encoding: 'utf8', timeout: 180_000 })
-    if (result.error) throw badRequest('Install zenity or kdialog to use the folder picker, or enter a folder path manually.')
+  try {
+    let result
+    if (process.platform === 'darwin') {
+      result = await run('osascript', ['-e', `POSIX path of (choose folder with prompt "${prompt}")`])
+    } else if (process.platform === 'win32') {
+      const script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}"
+      result = await run('powershell', ['-NoProfile', '-STA', '-Command', script])
+    } else {
+      try {
+        result = await run('zenity', ['--file-selection', '--directory', `--title=${prompt}`])
+      } catch {
+        try { result = await run('kdialog', ['--getexistingdirectory', '.', '--title', prompt]) } catch {
+          throw badRequest('Install zenity or kdialog to use the folder picker, or enter a folder path manually.')
+        }
+      }
+    }
+    return { path: result.status === 0 ? result.stdout.trim().replace(/[\\/]$/, '') : '' }
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    throw badRequest(`Could not open the folder picker: ${(error as Error).message}`)
   }
-  if (result.error) throw badRequest(`Could not open the folder picker: ${result.error.message}`)
-  return { path: result.status === 0 ? result.stdout.trim().replace(/\/$/, '') : '' }
 }
 
 const id = String.raw`([^/]+)`
 const routes: Route[] = [
-  ['GET', /^\/api\/health$/, () => ({ status: 'ok', app: 'visage', version: VERSION })],
+  ['GET', /^\/api\/health$/, () => ({ status: 'ok', app: 'visage', version: VERSION, data_dir: dataDir() })],
   ['GET', /^\/api\/projects$/, () => projects.listProjects()],
   ['POST', /^\/api\/projects$/, async (_, __, body) => projects.createProject(await body() ?? {})],
   ['PUT', new RegExp(`^/api/projects/${id}$`), async (_, [pid], body) => projects.renameProject(pid, (await body())?.name)],
@@ -125,6 +157,7 @@ export function createHttpServer(options: { uiDir: string | null; editorUrl: () 
   return createServer(async (request, response) => {
     try {
       if (!isLocalRequest(request)) return send(response, 403, { detail: 'Visage only accepts local requests' })
+      if (!isJsonWrite(request)) return send(response, 415, { detail: 'Send JSON with Content-Type: application/json' })
       const url = new URL(request.url ?? '/', 'http://localhost')
       if (url.pathname === '/mcp') return await handleMcp(request, response, options.editorUrl)
       if (!url.pathname.startsWith('/api/')) {
@@ -135,7 +168,9 @@ export function createHttpServer(options: { uiDir: string | null; editorUrl: () 
         const match = pattern.exec(url.pathname)
         if (!match) continue
         if (method !== request.method) continue
-        const params = match.slice(1).map(decodeURIComponent)
+        const params = match.slice(1).map(part => {
+          try { return decodeURIComponent(part) } catch { throw badRequest('Invalid URL encoding') }
+        })
         const result = await handler(request, params, () => readBody(request))
         if (result instanceof Raw) return send(response, 200, result.body, result.type, result.headers)
         return send(response, 200, result)

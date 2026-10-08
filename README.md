@@ -48,32 +48,41 @@ workflow: {id: review-flow, name: Review flow, version: 0.1.0, description: Used
 start: draft
 max_steps: 50               # stops runaway loops
 nodes:
-  draft:
+  draft:                    # no evaluation: produces files, always continues
     type: skill
     skill: {path: skills/draft/SKILL.md}
-    output_schema:          # JSON Schema subset: type, required, properties, enum, const, items, min/max, pattern
-      type: object
-      required: [text]
     next:
       - goto: review
   review:
     type: skill
     skill: {path: skills/review/SKILL.md}
-    checks:
-      - when: output.score >= 0.8
-        message: Score must be at least 0.8
-    max_attempts: 3         # the step is retried with the failure feedback
-    on_fail: draft          # after the last failed attempt; omit to fail the run
+    evaluation:
+      type: choice          # predicate | choice | score
+      question: Is the draft ready to publish?
+      options: [approved, changes, rejected]
+    max_attempts: 3         # an invalid result is retried with feedback
+    on_fail: draft          # after the last invalid attempt; omit to stop the run
     next:
       - goto: done
-        when: output.verdict == "approved"
-      - goto: draft         # no `when`: default transition
-  done:
-    type: skill
-    terminal: true
+        when: output.result == "approved"
+      - goto: draft
+        when: output.result == "changes"
+      - goto: archive       # no `when`: otherwise
+  done: {type: skill, terminal: true}
+  archive: {type: skill, terminal: true}
 ```
 
-Expressions are `<path> <operator> <literal>`. Paths start with `output.` (the step output) or `state.` (`input`, `outputs.<node>`, `feedback.<node>`, `attempts.<node>`) and may end in `.length`. Operators are `==`, `!=`, `<`, `<=`, `>`, `>=`, `in` and `not in`. Expressions never execute code. Missing start or final nodes and missing Skill files are saved as warnings and only block export.
+Every evaluated step returns `{"result": ..., "reason": "..."}`:
+
+| Type | `result` | Arcs |
+| --- | --- | --- |
+| `predicate` | `true` or `false` | `output.result == true`, `output.result == false` |
+| `choice` | exactly one of `options` | `output.result == "approved"` |
+| `score` | a number from 0 to 1 | `output.result >= 0.8` (also `>`, `<`, `<=`) |
+
+Steps may also write files and return other keys; only `result` chooses the next step. In the editor, the Inspector sets the type, question and options, and each arc gets a matching selector (yes/no, an option, a score threshold or *otherwise*). Validation warns when a result has no arc. Missing start or final nodes and missing Skill files are saved as warnings and only block export. The older `output_schema` and `checks` fields are ignored with a warning.
+
+`when` expressions are `<path> <operator> <literal>` (`==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`; paths start with `output.` or `state.`) and never execute code.
 
 ### MCP tools
 

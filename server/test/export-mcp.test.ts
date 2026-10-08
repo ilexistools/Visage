@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { unzipSync } from 'fflate'
@@ -10,7 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createMcpServer } from '../src/mcp.ts'
 import { projectDir } from '../src/store.ts'
-import { freshDataDir, install, SCHEMA, startServer } from './helpers.ts'
+import { freshDataDir, install, startServer } from './helpers.ts'
 
 let server: Awaited<ReturnType<typeof startServer>>
 before(async () => { freshDataDir(); server = await startServer() })
@@ -18,8 +18,11 @@ after(() => server.close())
 
 test('the exported plugin runs the state machine standalone with node', async () => {
   await install(server.call, 'attest', {
-    draft: { label: 'Draft', description: 'Write a draft', output_schema: SCHEMA, max_attempts: 2, next: [{ goto: 'review' }] },
-    review: { label: 'Review', next: [{ goto: 'done', when: 'output.verdict == "approved"' }, { goto: 'draft' }] },
+    draft: { label: 'Draft', description: 'Write a draft', next: [{ goto: 'review' }] },
+    review: {
+      label: 'Review', evaluation: { type: 'choice', question: 'Is the draft ready?', options: ['approved', 'changes'] }, max_attempts: 2,
+      next: [{ goto: 'done', when: 'output.result == "approved"' }, { goto: 'draft', when: 'output.result == "changes"' }],
+    },
     done: { terminal: true, description: 'Approved draft' },
   })
   const exported = await server.call('POST', '/api/projects/attest/export')
@@ -46,20 +49,21 @@ test('the exported plugin runs the state machine standalone with node', async ()
   let step = flow('start', '--input', '{"text": "raw"}')
   assert.equal(step.node, 'draft')
   assert.deepEqual(step.input, { text: 'raw' })
-  assert.deepEqual(step.output_contract.schema, SCHEMA)
-  const retry = flow('submit', '--output', '{"score": 5}')
-  assert.equal(retry.decision, 'retry')
-  assert.equal(retry.node, 'draft')
-  assert.ok(retry.feedback.includes('output.items is required'))
-  step = flow('submit', '--output', '{"score": 0.9, "items": ["x"]}')
+  assert.equal(step.output_contract, undefined, 'a step without evaluation has no contract')
+  step = flow('submit', '--output', '{"draft_file": "draft.md"}')
   assert.deepEqual([step.decision, step.node], ['next', 'review'])
-  assert.equal(step.previous_outputs.draft.score, 0.9)
-  assert.equal(flow('submit', '--output', '{"verdict": "changes"}').node, 'draft')
-  flow('submit', '--output', '```json\n{"score": 0.95, "items": ["y"]}\n```')
-  const final = flow('submit', '--output', '{"verdict": "approved"}')
+  assert.equal(step.previous_outputs.draft.draft_file, 'draft.md')
+  assert.deepEqual([step.output_contract.type, step.output_contract.question, step.output_contract.options], ['choice', 'Is the draft ready?', ['approved', 'changes']])
+  const retry = flow('submit', '--output', '{"result": "maybe"}')
+  assert.deepEqual([retry.decision, retry.node], ['retry', 'review'])
+  assert.deepEqual(retry.feedback, ['output.result must be one of ["approved","changes"]'])
+  assert.equal(flow('submit', '--output', '{"result": "changes", "reason": "too short"}').node, 'draft')
+  flow('submit', '--output', '```json\n{"draft_file": "draft-v2.md"}\n```')
+  const final = flow('submit', '--output', '{"result": "approved", "reason": "complete"}')
   assert.equal(final.status, 'completed')
   assert.equal(final.final_state, 'Approved draft')
-  assert.deepEqual(flow('status').attempts, { draft: 3, review: 2 })
+  assert.deepEqual(flow('status').attempts, { draft: 2, review: 3 })
+  assert.match(orchestrator, /choice: approved \/ changes, up to 2 attempts/)
 })
 
 async function connected() {
@@ -84,12 +88,15 @@ test('MCP tools build, validate and export a workflow', async () => {
   await call(client, 'configure_workflow', { project_id: 'via-mcp', description: 'Built over MCP' })
   const node = await call(client, 'upsert_node', {
     project_id: 'via-mcp', node_id: 'write', label: 'Write', skill_markdown: '# Write\n',
-    checks: [{ when: 'output.status == "ok"', message: 'Status must be ok' }], max_attempts: 2,
+    evaluation: { type: 'predicate', question: 'Is it written?' }, max_attempts: 2,
   })
   assert.equal(node.created, true)
   assert.ok(node.warnings.includes('Workflow needs a terminal node'))
   await call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'done', terminal: true })
+  await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done', when: 'output.result == true' }] })
+  assert.ok((await call(client, 'validate_project', { project_id: 'via-mcp' })).warnings.includes('Node write: no arc for result false'))
   await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done' }] })
+  await assert.rejects(call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'write', evaluation: { type: 'choice', options: ['one'] } }), /at least two options/)
   const pinned = (await call(client, 'get_workflow', { project_id: 'via-mcp' })).source.replace('- goto: done', '- goto: done\n        source_handle: bottom-2')
   await call(client, 'put_workflow', { project_id: 'via-mcp', source: pinned })
   await call(client, 'set_transitions', { project_id: 'via-mcp', node_id: 'write', transitions: [{ goto: 'done', label: 'ok' }] })
@@ -101,8 +108,9 @@ test('MCP tools build, validate and export a workflow', async () => {
   const skill = readFileSync(join(exported.path, 'skills/via-mcp/SKILL.md'), 'utf8')
   assert.deepEqual(JSON.parse(readFileSync(join(exported.path, 'skills/via-mcp/workflow.json'), 'utf8')).nodes.write.next, [{ goto: 'done', label: 'ok' }])
   assert.match(skill, /description: "Built over MCP"/)
-  await call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'write', checks: [] })
-  assert.equal((await call(client, 'get_workflow', { project_id: 'via-mcp' })).workflow.nodes.write.checks, undefined)
+  assert.deepEqual(JSON.parse(readFileSync(join(exported.path, 'skills/via-mcp/workflow.json'), 'utf8')).nodes.write.evaluation, { type: 'predicate', question: 'Is it written?' })
+  await call(client, 'upsert_node', { project_id: 'via-mcp', node_id: 'write', evaluation: null })
+  assert.equal((await call(client, 'get_workflow', { project_id: 'via-mcp' })).workflow.nodes.write.evaluation, undefined)
   await call(client, 'remove_node', { project_id: 'via-mcp', node_id: 'done' })
   assert.deepEqual((await call(client, 'get_workflow', { project_id: 'via-mcp' })).workflow.nodes.write.next, [])
   assert.equal(await call(client, 'read_file', { project_id: 'via-mcp', path: 'skills/write/SKILL.md' }), '# Write\n')
@@ -132,4 +140,31 @@ test('the bundled server starts over stdio and serves the editor', async () => {
   assert.equal(url, `http://127.0.0.1:${port}`)
   assert.equal((await (await fetch(`${url}/api/health`)).json()).app, 'visage')
   await client.close()
+})
+
+test('export and runner reject unsafe names and keep Skills clean', async () => {
+  await install(server.call, 'safe', {
+    draft: { label: 'A | B', evaluation: { type: 'choice', options: ['x | y', 'z'] }, next: [{ goto: 'done', when: 'output.result == "x | y"' }, { goto: 'done' }] },
+    done: { terminal: true },
+  })
+  const workflowFile = join(projectDir('safe'), 'workflow.yaml')
+  writeFileSync(workflowFile, readFileSync(workflowFile, 'utf8').replace('version: 1.2.0', "version: 1/../../escaped"))
+  writeFileSync(join(projectDir('safe'), 'skills/draft/SKILL.md'), '---\r\nname: draft\r\n---\r\n# Draft\r\n')
+  const out = mkdtempSync(join(tmpdir(), 'visage-out-'))
+  const exported = await server.call('POST', '/api/projects/safe/export', { output_dir: join(out, 'x') })
+  assert.equal(exported.status, 200, JSON.stringify(exported.data))
+  assert.ok(exported.data.zip.startsWith(join(out, 'x') + '/'), exported.data.zip)
+  const skill = join(exported.data.path, 'skills/safe')
+  assert.equal(readFileSync(join(skill, 'nodes/draft/STEP.md'), 'utf8'), '# Draft\r\n')
+  assert.ok(readFileSync(join(skill, 'SKILL.md'), 'utf8').includes('choice: x \\| y / z'))
+  const flowFile = join(skill, 'scripts/flow.mjs')
+  const stateDir = mkdtempSync(join(tmpdir(), 'visage-runs-'))
+  const run = (...args: string[]) => {
+    try { return JSON.parse(execFileSync('node', [flowFile, ...args, '--state-dir', stateDir], { encoding: 'utf8' })) } catch (error: any) { return JSON.parse(error.stdout) }
+  }
+  assert.match(run('start', '--run', '../escape').error, /Invalid run ID/)
+  assert.match(run('start', '--run', 'LATEST').error, /Invalid run ID/)
+  const step = run('start', '--run', 'ok-1')
+  assert.ok(existsSync(join(step.output_file, '..')), 'the folder for output_file exists before the first submit')
+  assert.match(step.submit, /--run "ok-1"/)
 })

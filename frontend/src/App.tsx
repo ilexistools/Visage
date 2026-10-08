@@ -6,6 +6,8 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, Magnet, Package, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
+import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
+import { conditionSummary } from './evaluation'
 import { defaultPosition, edgeId, layoutEdgePorts, parsePortId, PORT_SLOTS, portId, routeCenter, type EdgePorts, type PortSide } from './edgeLayout'
 
 type WorkflowDoc = { version: number; workflow: { id: string; name: string; version: string }; start: string; nodes: Record<string, any> }
@@ -33,32 +35,6 @@ function InlineText({ value, onCommit, tag = 'span', className = '', title, plac
   return <input className={`inline-text-input nodrag nopan ${className}`} aria-label="Edit text" autoFocus value={draft} onChange={event => setDraft(event.target.value)} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onBlur={() => { setEditing(false); if (cancelOnBlur.current) { cancelOnBlur.current = false; setDraft(value) } else if (draft !== value) onCommit(draft) }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { cancelOnBlur.current = true; event.currentTarget.blur() } }} />
 }
 
-function JsonField({ value, onCommit, placeholder }: { value: unknown; onCommit: (value: unknown) => void; placeholder?: string }) {
-  const serialized = value === undefined ? '' : JSON.stringify(value, null, 2)
-  const [draft, setDraft] = useState(serialized)
-  const [invalid, setInvalid] = useState('')
-  useEffect(() => { setDraft(serialized); setInvalid('') }, [serialized])
-  const commit = () => {
-    if (!draft.trim()) { setInvalid(''); if (value !== undefined) onCommit(undefined); return }
-    try { const parsed = JSON.parse(draft); setInvalid(''); if (JSON.stringify(parsed, null, 2) !== serialized) onCommit(parsed) } catch (error) { setInvalid((error as Error).message) }
-  }
-  return <><textarea className="code-input" rows={6} spellCheck={false} value={draft} placeholder={placeholder} onChange={event => setDraft(event.target.value)} onBlur={commit} />{invalid && <p className="helper field-error">Invalid JSON: {invalid}</p>}</>
-}
-
-type Check = { when: string; message?: string }
-const checksToText = (checks: Check[] = []) => checks.map(check => typeof check === 'string' ? check : check.message ? `${check.when} :: ${check.message}` : check.when).join('\n')
-const textToChecks = (text: string): Check[] => text.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-  const [when, ...message] = line.split('::')
-  return message.length ? { when: when.trim(), message: message.join('::').trim() } : { when: when.trim() }
-})
-
-function ChecksField({ value, onCommit }: { value: Check[] | undefined; onCommit: (value: Check[] | undefined) => void }) {
-  const serialized = checksToText(value)
-  const [draft, setDraft] = useState(serialized)
-  useEffect(() => setDraft(serialized), [serialized])
-  return <textarea className="code-input" rows={3} spellCheck={false} value={draft} placeholder={'output.score >= 0.8 :: Score must be at least 0.8'} onChange={event => setDraft(event.target.value)} onBlur={() => { if (draft !== serialized) { const checks = textToChecks(draft); onCommit(checks.length ? checks : undefined) } }} />
-}
-
 function FlowNode({ data, selected }: any) {
   const used = new Set<string>(data.usedHandles || [])
   return <div className={`flow-node ${data.kind} ${data.isFinal ? 'final' : ''} ${data.status || ''} ${selected ? 'selected' : ''}`}>
@@ -71,14 +47,14 @@ function FlowNode({ data, selected }: any) {
 const nodeTypes = { vasm: FlowNode }
 
 function FlowEdge(props: EdgeProps) {
-  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle } | undefined
+  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle; condition?: string } | undefined
   const ends = { sourceX: props.sourceX, sourceY: props.sourceY, sourcePosition: props.sourcePosition, targetX: props.targetX, targetY: props.targetY, targetPosition: props.targetPosition }
   const [path, labelX, labelY] = data?.lineStyle === 'straight' ? getStraightPath(ends)
     : data?.lineStyle === 'curved' ? getBezierPath({ ...ends, curvature: 0.3 })
     : getSmoothStepPath({ ...ends, offset: 18, ...(data?.ports ? routeCenter(data.ports, { x: props.sourceX, y: props.sourceY }, { x: props.targetX, y: props.targetY }) : {}) })
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} interactionWidth={20} />
-    <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}><InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder="+" /></div></EdgeLabelRenderer>
+    <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}><InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
   </>
 }
 const edgeTypes = { editable: FlowEdge }
@@ -187,11 +163,14 @@ export default function App() {
       setNotice(`Plugin exported to the project's dist/ folder and downloaded as ${filename}.`)
     } catch (e) { tell(e) } finally { setBusy(false) }
   }
+  const pendingSaveRef = useRef<null | (() => Promise<boolean>)>(null)
   const tell = (value: unknown) => setNotice(value instanceof Error ? value.message : String(value))
   const loadProjects = useCallback(async () => { try { setProjects(await api('/projects')) } catch (e) { tell(e) } }, [])
   useEffect(() => { loadProjects() }, [loadProjects])
 
   const loadProject = useCallback(async (id: string) => {
+    // Save pending edits of the current project before switching.
+    if (pendingSaveRef.current && !(await pendingSaveRef.current())) return
     try {
       const [result, projectFiles] = await Promise.all([api(`/projects/${id}/workflow`), api(`/projects/${id}/files`)])
       setWorkflow(result.workflow); setSource(result.source); setFiles(projectFiles); setProjectId(id); setSelectedNode(null); setDirty(false); setYamlDirty(false); setMobileProjectOpen(false); setSkillEditorOpen(false); setSkillDirty(false)
@@ -221,17 +200,27 @@ export default function App() {
       },
     }))
     const mappedEdges: Edge[] = Object.entries(workflow.nodes || {}).flatMap(([id, node]) => (node.terminal ? [] : node.next || []).flatMap((next: any, index: number) => !ports[edgeId(id, next.goto, index)] ? [] : [{
-      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
+      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, condition: conditionSummary(next.when, node.evaluation), onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
       markerEnd: { type: MarkerType.Arrow, color: '#667b99', width: 14, height: 14 },
       style: { stroke: '#667b99', strokeWidth: 2.2 }, labelStyle: { fill: '#64748b', fontSize: 11 },
     }]))
-    setNodes(mappedNodes); setEdges(mappedEdges)
-  }, [workflow, lineStyle, setNodes, setEdges])
+    // Keep React Flow's own state: the selection ring, and the position of a node being dragged.
+    setNodes(current => mappedNodes.map(node => {
+      const live = current.find(item => item.id === node.id)
+      return { ...node, selected: node.id === selectedNode, ...(live?.dragging ? { position: live.position, dragging: true } : {}) }
+    }))
+    setEdges(mappedEdges)
+  }, [workflow, lineStyle, selectedNode, setNodes, setEdges])
 
+  /** Merge a patch into the latest node state; keys set to undefined are removed. */
   const updateNode = (id: string, patch: Record<string, unknown>) => {
-    const node = { ...workflow.nodes[id], ...patch }
-    Object.keys(patch).forEach(key => { if (patch[key] === undefined) delete node[key] })
-    setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], ...node } } })); setDirty(true)
+    setWorkflow(old => {
+      if (!old.nodes[id]) return old
+      const node = { ...old.nodes[id], ...patch }
+      Object.keys(patch).forEach(key => { if (patch[key] === undefined) delete node[key] })
+      return { ...old, nodes: { ...old.nodes, [id]: node } }
+    })
+    setDirty(true)
   }
   const onMoveEnd = (_: unknown, node: Node) => updateNode(node.id, { position: { x: Math.round(node.position.x), y: Math.round(node.position.y) } })
   const onConnect = (connection: Connection) => {
@@ -251,25 +240,39 @@ export default function App() {
     setContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 280)), flowPosition, target })
   }
   const removeNode = (id: string) => {
-    const removed = workflow.nodes[id]
-    if (!removed) return
+    setWorkflow(old => {
+    const removed = old.nodes[id]
+    if (!removed) return old
     const remaining: Record<string, any> = {}
-    Object.entries(workflow.nodes).forEach(([nodeId, node]) => {
+    Object.entries(old.nodes).forEach(([nodeId, node]: [string, any]) => {
       if (nodeId === id) return
-      remaining[nodeId] = node.next ? { ...node, next: node.next.filter((transition: any) => transition.goto !== id) } : node
+      const updated = node.next ? { ...node, next: node.next.filter((transition: any) => transition.goto !== id) } : { ...node }
+      if (updated.on_fail === id) delete updated.on_fail
+      remaining[nodeId] = updated
     })
-    let start = workflow.start
+    let start = old.start
     if (start === id) start = removed.next?.[0]?.goto || Object.keys(remaining)[0] || ''
     if (!remaining[start]) start = Object.keys(remaining)[0] || ''
-    setWorkflow(old => ({ ...old, start, nodes: remaining })); setDirty(true); setSelectedNode(null); setContextMenu(null)
+    return { ...old, start, nodes: remaining }
+    })
+    setDirty(true); setSelectedNode(null); setContextMenu(null)
   }
-  const removeEdge = (id: string, source: string, target: string) => {
-    const transitions = workflow.nodes[source]?.next || []
-    const index = transitions.findIndex((transition: any, position: number) => `${source}-${transition.goto}-${position}` === id && transition.goto === target)
-    if (index < 0) return
-    updateNode(source, { next: transitions.filter((_: any, position: number) => position !== index) })
+  /** Remove arcs in one update: arc IDs contain their position, so removing one at a time would shift the others. */
+  const removeEdges = (removed: { id: string; source: string; target: string }[]) => {
+    setWorkflow(old => {
+      const nodes = { ...old.nodes }
+      for (const source of new Set(removed.map(edge => edge.source))) {
+        const transitions = nodes[source]?.next
+        if (!transitions) continue
+        const ids = new Set(removed.filter(edge => edge.source === source).map(edge => edge.id))
+        nodes[source] = { ...nodes[source], next: transitions.filter((transition: any, position: number) => !ids.has(edgeId(source, transition.goto, position))) }
+      }
+      return { ...old, nodes }
+    })
+    setDirty(true)
     setContextMenu(null)
   }
+  const removeEdge = (id: string, source: string, target: string) => removeEdges([{ id, source, target }])
   const transitionIndex = (id: string, source: string, target: string) =>
     (workflow.nodes[source]?.next || []).findIndex((transition: any, position: number) => edgeId(source, transition.goto, position) === id && transition.goto === target)
   const unpinEdge = (id: string, source: string, target: string) => {
@@ -288,7 +291,11 @@ export default function App() {
   }
   const setNodeState = (id: string, state: 'normal' | 'initial' | 'final') => {
     setWorkflow(old => {
-      const nextNodes = { ...old.nodes, [id]: { ...old.nodes[id], terminal: state === 'final' } }
+      const node = { ...old.nodes[id], terminal: state === 'final' }
+      // A final state ends the run: it has no arcs, evaluation or failure route.
+      if (state === 'final') { delete node.next; delete node.evaluation; delete node.on_fail; delete node.max_attempts }
+      else node.next ??= []
+      const nextNodes = { ...old.nodes, [id]: node }
       let start = old.start
       if (state === 'initial') start = id
       else if (start === id) start = Object.keys(nextNodes).find(candidate => candidate !== id) || ''
@@ -357,6 +364,12 @@ export default function App() {
       return true
     } catch (e) { tell(e); return false } finally { setBusy(false) }
   }
+  pendingSaveRef.current = async () => {
+    if ((dirty || yamlDirty) && !(await saveWorkflow())) return false
+    if (skillDirty && !(await saveSkillMarkdown())) return false
+    return true
+  }
+
   useEffect(() => {
     if (!dirty || !projectId || lastWorkflowAutosaveRef.current === workflowSignature) return
     const signature = workflowSignature
@@ -376,6 +389,11 @@ export default function App() {
       setSkillEditorPath(path); setSkillEditorLabel(selected.label || 'Skill'); setSkillMarkdown(await response.text()); setSkillDirty(false); setSkillPreview(false); setSkillEditorOpen(true)
     } catch (error) { tell(error) }
   }
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || yamlDirty || skillDirty) event.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty, yamlDirty, skillDirty])
   const saveSkillMarkdown = async () => {
     if (!projectId || !skillEditorPath) return false
     const snapshot = skillMarkdown
@@ -492,7 +510,7 @@ export default function App() {
 
       <main className="main-area">
         <div className="canvas-wrap">
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={setFlowInstance} onPaneClick={() => { setContextMenu(null); setSelectedNode(null) }} onPaneContextMenu={event => openContextMenu(event)} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={(_, node) => { setSelectedNode(node.id); setContextMenu(null) }} onNodeContextMenu={(event, node) => { setSelectedNode(node.id); openContextMenu(event, { kind: 'node', id: node.id }) }} onEdgeClick={() => setContextMenu(null)} onEdgeContextMenu={(event, edge) => openContextMenu(event, { kind: 'edge', id: edge.id, source: edge.source, target: edge.target })} onNodeDragStop={onMoveEnd} onConnect={onConnect} connectionMode={ConnectionMode.Loose} fitView fitViewOptions={{ padding: 0.23 }} minZoom={0.35} maxZoom={1.5} proOptions={{ hideAttribution: false }}><Background color="#d8e2ef" gap={22} size={1} /><Controls /></ReactFlow>
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={setFlowInstance} onPaneClick={() => { setContextMenu(null); setSelectedNode(null) }} onPaneContextMenu={event => openContextMenu(event)} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodesDelete={deleted => deleted.forEach(node => removeNode(node.id))} onEdgesDelete={removeEdges} onNodeClick={(_, node) => { setSelectedNode(node.id); setContextMenu(null) }} onNodeContextMenu={(event, node) => { setSelectedNode(node.id); openContextMenu(event, { kind: 'node', id: node.id }) }} onEdgeClick={() => setContextMenu(null)} onEdgeContextMenu={(event, edge) => openContextMenu(event, { kind: 'edge', id: edge.id, source: edge.source, target: edge.target })} onNodeDragStop={onMoveEnd} onConnect={onConnect} connectionMode={ConnectionMode.Loose} fitView fitViewOptions={{ padding: 0.23 }} minZoom={0.35} maxZoom={1.5} proOptions={{ hideAttribution: false }}><Background color="#d8e2ef" gap={22} size={1} /><Controls /></ReactFlow>
           {contextMenu && <div className="canvas-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onContextMenu={event => event.preventDefault()}>
             <span className="context-menu-title">Add node</span>
             <div className="context-menu-grid">
@@ -520,20 +538,14 @@ export default function App() {
         <div className="inspector-body">
           <div className="field"><label>Label</label><input value={selected.label || ''} onChange={e => updateNode(selectedNode!, { label: e.target.value })} /></div>
           <div className="field"><label>Description</label><textarea rows={2} value={selected.description || ''} onChange={e => updateNode(selectedNode!, { description: e.target.value })} placeholder="Briefly describe this step" /></div>
-          <div className="field"><label>Arc</label>{!selected.terminal && !!selected.next?.length ? selected.next.map((transition: any, index: number) => <div className="arc-text-edit" key={`${transition.goto}-${index}`}><span className="arc-target">→ {workflow.nodes[transition.goto]?.label || transition.goto}</span><input aria-label={`Arc text to ${workflow.nodes[transition.goto]?.label || transition.goto}`} placeholder="Label" value={transition.label || ''} onChange={event => { const next = [...selected.next]; next[index] = { ...next[index], label: event.target.value }; updateNode(selectedNode!, { next }) }} /><input className="code-input" aria-label={`Condition to ${workflow.nodes[transition.goto]?.label || transition.goto}`} placeholder={index === selected.next.length - 1 ? 'Condition (empty = default)' : 'output.status == "approved"'} value={transition.when || ''} onChange={event => { const next = [...selected.next]; const { when: _when, ...rest } = next[index]; next[index] = event.target.value ? { ...rest, when: event.target.value } : rest; updateNode(selectedNode!, { next }) }} /></div>) : <p className="helper">This node has no outgoing arcs.</p>}</div>
           <fieldset className="field state-field"><legend>State</legend><div className="state-options">{(['normal', 'initial', 'final'] as const).map(state => {
             const checked = workflow.start === selectedNode ? state === 'initial' : selected.terminal ? state === 'final' : state === 'normal'
             const disabled = (state === 'normal' || state === 'final') && workflow.start === selectedNode && Object.keys(workflow.nodes).length === 1
             return <label key={state} className={checked ? 'checked' : ''}><input type="radio" name="node-state" value={state} checked={checked} disabled={disabled} onChange={() => setNodeState(selectedNode!, state)} />{state === 'initial' ? 'Initial' : state === 'final' ? 'Final' : 'Normal'}</label>
           })}</div></fieldset>
           <div className="field node-skill-actions"><label>Skill</label><button type="button" className="button skill-open-button" onClick={openSkillEditor} disabled={skillBusy}><BookOpen size={15} /> Edit Skill Markdown</button><input ref={importSkillInput} type="file" multiple hidden onChange={event => importSkillFiles(event.target.files)} /><button type="button" className="button skill-import-button" onClick={() => importSkillInput.current?.click()} disabled={skillBusy}><Upload size={15} /> Import files</button><p className="helper">Markdown, PDF, code and other reference files.</p></div>
-          {!selected.terminal && <fieldset className="field evaluation-field"><legend>Evaluation</legend>
-            <label>Output schema (JSON Schema)</label><JsonField value={selected.output_schema} placeholder={'{"type": "object", "required": ["status"]}'} onCommit={value => updateNode(selectedNode!, { output_schema: value })} />
-            <label>Checks <span className="helper">one per line · expression :: message</span></label><ChecksField value={selected.checks} onCommit={value => updateNode(selectedNode!, { checks: value })} />
-            <div className="evaluation-row"><label>Max attempts<input type="number" min={1} max={20} value={selected.max_attempts || 1} onChange={event => updateNode(selectedNode!, { max_attempts: Math.min(20, Math.max(1, Number(event.target.value) || 1)) })} /></label>
-            <label>On failure<select value={selected.on_fail || ''} onChange={event => updateNode(selectedNode!, { on_fail: event.target.value || undefined })}><option value="">Fail the run</option>{Object.entries(workflow.nodes).filter(([id]) => id !== selectedNode).map(([id, node]: [string, any]) => <option key={id} value={id}>Go to {node.label || id}</option>)}</select></label></div>
-            <p className="helper">Failed outputs are retried with feedback up to the attempt limit, then routed to the failure target.</p>
-          </fieldset>}
+          {!selected.terminal && <EvaluationEditor key={selectedNode} node={selected} nodeId={selectedNode!} nodes={workflow.nodes} onChange={patch => updateNode(selectedNode!, patch)} />}
+          {!selected.terminal && <div className="field"><label>Next steps</label><ArcConditions node={selected} nodes={workflow.nodes} onChange={next => updateNode(selectedNode!, { next })} /></div>}
         </div>
       </aside>}
     </div>

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
-import type { Check, JsonObject, Transition, Workflow, WorkflowNode } from './engine.ts'
-import { badRequest, checkedId, defaultProjectsDir, findProject, inside, listProjects, notFound, now, projectDir, saveProjects, workflowPath, writeJson, writeText, type Project } from './store.ts'
+import type { Evaluation, Transition, Workflow, WorkflowNode } from './engine.ts'
+import { badRequest, checkedId, defaultProjectsDir, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
 import { dumpWorkflow, parseWorkflow, validateWorkflow } from './workflow.ts'
 
 const MAX_FILE_BYTES = 25_000_000
@@ -9,35 +9,50 @@ const SKIP_LISTING = new Set(['dist', 'node_modules', '.git', '.visage'])
 
 export { listProjects }
 
+const text = (value: unknown, field: string) => {
+  if (value !== undefined && value !== null && typeof value !== 'string') throw badRequest(`${field} must be text`)
+  return (value ?? '') as string
+}
+
 export function createProject(input: { id: string; name: string; parent_path?: string | null }): Project {
-  const id = checkedId(input.id)
-  const name = input.name?.trim()
+  const id = checkedId(input?.id)
+  const name = text(input.name, 'name').trim()
+  const parentPath = text(input.parent_path, 'parent_path')
   if (!name) throw badRequest('Project name cannot be empty')
   if (findProject(id)) throw badRequest('Project identifier already exists')
   let path: string
-  if (input.parent_path) {
-    const parent = resolve(input.parent_path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'))
+  if (parentPath) {
+    input = { ...input, parent_path: parentPath }
+    const parent = resolve(input.parent_path!.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'))
     if (!existsSync(parent) || !statSync(parent).isDirectory()) throw badRequest('Choose an existing parent folder')
     path = join(parent, id)
   } else {
     path = join(defaultProjectsDir(), id)
   }
   if (existsSync(path)) throw badRequest('A project folder with this name already exists in the selected location')
+  // Nested projects would be deleted together with their parent project.
+  const nested = listProjects().find(other => isInside(resolve(other.root_path), resolve(path)) || isInside(resolve(path), resolve(other.root_path)))
+  if (nested) throw badRequest(`Choose a folder outside the project "${nested.name}"`)
   mkdirSync(path, { recursive: true })
   const project: Project = { id, name, created_at: now(), root_path: path }
   writeJson(join(path, 'project.json'), project)
   const blank: Workflow = { version: 1, workflow: { id, name, version: '0.1.0' }, start: '', nodes: {} }
   writeText(join(path, 'workflow.yaml'), dumpWorkflow(blank))
-  saveProjects([...listProjects(), project])
-  return project
+  return updateProjects(projects => {
+    if (projects.some(other => other.id === id)) {
+      rmSync(path, { recursive: true, force: true })
+      throw badRequest('Project identifier already exists')
+    }
+    return { projects: [...projects, project], result: project }
+  })
 }
 
 export function renameProject(id: string, name: string): Project {
   const project = findProject(id)
   if (!project) throw notFound(`Project not found: ${id}`)
-  if (!name?.trim()) throw badRequest('Project name cannot be empty')
+  if (!text(name, 'name').trim()) throw badRequest('Project name cannot be empty')
   project.name = name.trim()
-  saveProjects(listProjects().map(item => item.id === id ? project : item))
+  updateProjects(projects => ({ projects: projects.map(item => item.id === id ? { ...item, name: project.name } : item), result: null }))
   const metadataPath = join(project.root_path, 'project.json')
   if (existsSync(metadataPath)) writeJson(metadataPath, { ...JSON.parse(readFileSync(metadataPath, 'utf8')), name: project.name })
   return project
@@ -46,8 +61,10 @@ export function renameProject(id: string, name: string): Project {
 export function deleteProject(id: string): { id: string; status: string } {
   const project = findProject(id)
   if (!project) throw notFound(`Project not found: ${id}`)
+  const nested = listProjects().find(other => other.id !== id && isInside(resolve(project.root_path), resolve(other.root_path)))
+  if (nested) throw badRequest(`The project folder contains the project "${nested.name}"; delete that one first`)
+  updateProjects(projects => ({ projects: projects.filter(item => item.id !== id), result: null }))
   rmSync(project.root_path, { recursive: true, force: true })
-  saveProjects(listProjects().filter(item => item.id !== id))
   return { id, status: 'deleted' }
 }
 
@@ -59,6 +76,11 @@ export function getWorkflow(id: string) {
 }
 
 export function putWorkflow(id: string, source: string) {
+  if (typeof source !== 'string') throw badRequest('source must be text')
+  return withLock(workflowPath(id), () => writeWorkflow(id, source))
+}
+
+function writeWorkflow(id: string, source: string) {
   const result = validateWorkflow(source, projectDir(id))
   writeText(workflowPath(id), source)
   return result
@@ -76,7 +98,15 @@ export function validateProject(id: string) {
 }
 
 const load = (id: string) => parseWorkflow(readFileSync(workflowPath(id), 'utf8'))
-const save = (id: string, workflow: Workflow) => putWorkflow(id, dumpWorkflow(workflow))
+
+/** Read, change and save the workflow under a lock, so concurrent editors do not lose changes. */
+function edit<T extends object>(id: string, change: (workflow: Workflow) => T): T & ReturnType<typeof writeWorkflow> {
+  return withLock(workflowPath(id), () => {
+    const workflow = load(id)
+    const extra = change(workflow)
+    return { ...extra, ...writeWorkflow(id, dumpWorkflow(workflow)) }
+  })
+}
 
 function nodeOf(workflow: Workflow, nodeId: string): WorkflowNode {
   if (!Object.hasOwn(workflow.nodes, nodeId)) throw notFound(`Node not found: ${nodeId}`)
@@ -84,11 +114,12 @@ function nodeOf(workflow: Workflow, nodeId: string): WorkflowNode {
 }
 
 export function configureWorkflow(id: string, settings: { name?: string; description?: string; version?: string; max_steps?: number }) {
-  const workflow = load(id)
-  workflow.workflow ??= {}
-  for (const key of ['name', 'description', 'version'] as const) if (settings[key] !== undefined) workflow.workflow[key] = settings[key]
-  if (settings.max_steps !== undefined) workflow.max_steps = settings.max_steps
-  return save(id, workflow)
+  return edit(id, workflow => {
+    workflow.workflow ??= {}
+    for (const key of ['name', 'description', 'version'] as const) if (settings[key] !== undefined) workflow.workflow[key] = settings[key]
+    if (settings.max_steps !== undefined) workflow.max_steps = settings.max_steps
+    return {}
+  })
 }
 
 export type NodeInput = {
@@ -97,84 +128,102 @@ export type NodeInput = {
   skill_markdown?: string
   skill_path?: string
   terminal?: boolean
-  output_schema?: JsonObject
-  checks?: Check[]
+  /** Set the step evaluation; null removes it. */
+  evaluation?: Evaluation | null
   max_attempts?: number
   on_fail?: string
   position?: { x: number; y: number }
 }
 
-/** Create or update a node; only provided fields change. Empty values clear evaluation fields. */
+/** Create or update a node; only provided fields change. evaluation: null and on_fail: "" clear those fields. */
 export function upsertNode(id: string, nodeId: string, input: NodeInput) {
   checkedId(nodeId)
-  const workflow = load(id)
-  const created = !Object.hasOwn(workflow.nodes, nodeId)
-  const count = Object.keys(workflow.nodes).length
-  const node: WorkflowNode = workflow.nodes[nodeId] ??= { type: 'skill', label: input.label ?? nodeId, next: [] }
-  if (created && !input.terminal) {
-    node.skill = { path: input.skill_path ?? `skills/${nodeId}/SKILL.md` }
-    node.position = input.position ?? { x: 160 + 260 * count, y: 180 }
-  }
-  for (const key of ['label', 'description', 'position', 'max_attempts'] as const) if (input[key] !== undefined) node[key] = input[key] as never
-  for (const key of ['output_schema', 'checks', 'on_fail'] as const) {
-    const value = input[key]
-    if (value === undefined) continue
-    const empty = value === '' || (Array.isArray(value) && !value.length) || (typeof value === 'object' && value !== null && !Array.isArray(value) && !Object.keys(value).length)
-    if (empty) delete node[key]
-    else node[key] = value as never
-  }
-  if (input.skill_path !== undefined) node.skill = { path: input.skill_path }
-  if (input.terminal === true) {
-    node.terminal = true
-    delete node.next
-  } else if (input.terminal === false) {
-    delete node.terminal
-    node.next ??= []
-    node.skill ??= { path: `skills/${nodeId}/SKILL.md` }
-  }
-  if (input.skill_markdown !== undefined) {
-    if (!node.skill?.path) throw badRequest('Final nodes have no Skill; set terminal=false first')
-    writeFile(id, node.skill.path, input.skill_markdown)
-  }
-  if (!workflow.start) workflow.start = nodeId
-  return { node_id: nodeId, created, ...save(id, workflow) }
+  let markdown: { path: string; content: string } | undefined
+  const result = edit(id, workflow => {
+    // Own-property checks: node IDs such as "constructor" must not reach Object.prototype.
+    const created = !Object.hasOwn(workflow.nodes, nodeId)
+    const count = Object.keys(workflow.nodes).length
+    if (created) workflow.nodes[nodeId] = { type: 'skill', label: input.label ?? nodeId, next: [] }
+    const node: WorkflowNode = workflow.nodes[nodeId]
+    if (created && !input.terminal) {
+      node.skill = { path: input.skill_path ?? `skills/${nodeId}/SKILL.md` }
+      node.position = input.position ?? { x: 160 + 260 * count, y: 180 }
+    }
+    for (const key of ['label', 'description', 'position', 'max_attempts'] as const) if (input[key] !== undefined) node[key] = input[key] as never
+    if (input.on_fail !== undefined) {
+      if (input.on_fail) node.on_fail = input.on_fail
+      else delete node.on_fail
+    }
+    if (input.evaluation !== undefined) {
+      if (input.evaluation) node.evaluation = input.evaluation
+      else delete node.evaluation
+      // The typed evaluation replaces the old free-form schema and checks.
+      delete node.output_schema
+      delete node.checks
+    }
+    if (input.skill_path !== undefined) node.skill = { path: input.skill_path }
+    if (input.terminal === true) {
+      node.terminal = true
+      delete node.next
+      delete node.evaluation
+    } else if (input.terminal === false) {
+      delete node.terminal
+      node.next ??= []
+      node.skill ??= { path: `skills/${nodeId}/SKILL.md` }
+    }
+    if (input.skill_markdown !== undefined) {
+      const path = node.skill?.path
+      if (!path) throw badRequest('Final nodes have no Skill; set terminal=false first')
+      if (!path.endsWith('SKILL.md')) throw badRequest(`Node ${nodeId} needs a SKILL.md path`)
+      inside(projectDir(id), path)
+      markdown = { path, content: input.skill_markdown }
+    }
+    if (!workflow.start) workflow.start = nodeId
+    return { node_id: nodeId, created }
+  })
+  // Written after the workflow validated, so a rejected change leaves no stray file.
+  if (markdown) writeFile(id, markdown.path, markdown.content)
+  return markdown ? { ...result, ...validateWorkflow(readFileSync(workflowPath(id), 'utf8'), projectDir(id)) } : result
 }
 
 export function removeNode(id: string, nodeId: string) {
-  const workflow = load(id)
-  nodeOf(workflow, nodeId)
-  delete workflow.nodes[nodeId]
-  for (const node of Object.values(workflow.nodes)) {
-    if (node.next) node.next = node.next.filter(transition => transition.goto !== nodeId)
-    if (node.on_fail === nodeId) delete node.on_fail
-  }
-  if (workflow.start === nodeId) workflow.start = Object.keys(workflow.nodes)[0] ?? ''
-  return save(id, workflow)
+  return edit(id, workflow => {
+    nodeOf(workflow, nodeId)
+    delete workflow.nodes[nodeId]
+    for (const node of Object.values(workflow.nodes)) {
+      if (node.next) node.next = node.next.filter(transition => transition.goto !== nodeId)
+      if (node.on_fail === nodeId) delete node.on_fail
+    }
+    if (workflow.start === nodeId) workflow.start = Object.keys(workflow.nodes)[0] ?? ''
+    return {}
+  })
 }
 
 export function setTransitions(id: string, nodeId: string, transitions: Transition[]) {
-  const workflow = load(id)
-  const node = nodeOf(workflow, nodeId)
-  if (node.terminal) throw badRequest('Final nodes cannot have transitions')
-  // Keep connection points the user pinned in the editor for arcs that still go to the same node.
-  const previous = [...(node.next ?? [])]
-  node.next = transitions.map(({ goto, when, label }) => {
-    const match = previous.findIndex(transition => transition.goto === goto)
-    const pins = match >= 0 ? previous.splice(match, 1)[0] : undefined
-    return {
-      goto, ...(when ? { when } : {}), ...(label ? { label } : {}),
-      ...(pins?.source_handle ? { source_handle: pins.source_handle } : {}),
-      ...(pins?.target_handle ? { target_handle: pins.target_handle } : {}),
-    }
+  return edit(id, workflow => {
+    const node = nodeOf(workflow, nodeId)
+    if (node.terminal) throw badRequest('Final nodes cannot have transitions')
+    // Keep connection points the user pinned in the editor for arcs that still go to the same node.
+    const previous = [...(node.next ?? [])]
+    node.next = transitions.map(({ goto, when, label }) => {
+      const match = previous.findIndex(transition => transition.goto === goto)
+      const pins = match >= 0 ? previous.splice(match, 1)[0] : undefined
+      return {
+        goto, ...(when ? { when } : {}), ...(label ? { label } : {}),
+        ...(pins?.source_handle ? { source_handle: pins.source_handle } : {}),
+        ...(pins?.target_handle ? { target_handle: pins.target_handle } : {}),
+      }
   })
-  return save(id, workflow)
+  return {}
+  })
 }
 
 export function setStart(id: string, nodeId: string) {
-  const workflow = load(id)
-  nodeOf(workflow, nodeId)
-  workflow.start = nodeId
-  return save(id, workflow)
+  return edit(id, workflow => {
+    nodeOf(workflow, nodeId)
+    workflow.start = nodeId
+    return {}
+  })
 }
 
 // --- Files -------------------------------------------------------------------

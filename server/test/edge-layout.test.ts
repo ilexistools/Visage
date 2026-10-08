@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { defaultPosition, layoutEdgePorts, NODE_HEIGHT as H, NODE_WIDTH as W, PORT_SLOTS, portId, spreadSlots, type EdgePorts, type PortSide } from '../../frontend/src/edgeLayout.ts'
+import { defaultPosition, edgeId, layoutEdgePorts, NODE_HEIGHT as H, NODE_WIDTH as W, PORT_SLOTS, portId, spreadSlots, type EdgePorts, type PortSide } from '../../frontend/src/edgeLayout.ts'
 
 type Nodes = Record<string, { position?: { x: number; y: number }; terminal?: boolean; next?: { goto: string }[] }>
 type Point = { x: number; y: number }
@@ -24,7 +24,7 @@ function measure(nodes: Nodes) {
   const segments: [Point, Point][] = []
   for (const [source, node] of Object.entries(nodes)) {
     ;(node.terminal ? [] : node.next ?? []).forEach((next, index) => {
-      const port: EdgePorts = ports[`${source}-${next.goto}-${index}`]
+      const port: EdgePorts = ports[edgeId(source, next.goto, index)]
       for (const spot of [`${source}:${port.sourceSide}:${Math.round(port.sourceOffset)}`, `${next.goto}:${port.targetSide}:${Math.round(port.targetOffset)}`]) spots.set(spot, (spots.get(spot) ?? 0) + 1)
       segments.push([point(position(source), port.sourceSide, port.sourceOffset), point(position(next.goto), port.targetSide, port.targetOffset)])
     })
@@ -57,8 +57,8 @@ for (const [name, nodes] of Object.entries(scenarios)) {
 
 test('arcs between the same nodes use parallel ports in the same order at both ends', () => {
   const ports = layoutEdgePorts(scenarios['arcs in both directions'])
-  const forward = ports['a-b-0']
-  const back = ports['b-a-0']
+  const forward = ports['a::b::0']
+  const back = ports['b::a::0']
   assert.equal(forward.sourceSide, back.targetSide)
   assert.equal(forward.targetSide, back.sourceSide)
   assert.equal(forward.sourceOffset < back.targetOffset, forward.targetOffset < back.sourceOffset)
@@ -66,7 +66,7 @@ test('arcs between the same nodes use parallel ports in the same order at both e
 
 test('ports on a side follow the position of the other node', () => {
   const ports = layoutEdgePorts(scenarios['fan-out listed out of order'])
-  const offsets = ['a-b-1', 'a-c-2', 'a-d-0'].map(id => ports[id].sourceOffset)
+  const offsets = ['a::b::1', 'a::c::2', 'a::d::0'].map(id => ports[id].sourceOffset)
   assert.ok(offsets[0] < offsets[1] && offsets[1] < offsets[2], JSON.stringify(offsets))
 })
 
@@ -86,7 +86,7 @@ test('ports on a side are spread along it and stay unique', () => {
   assert.deepEqual(spreadSlots(4, 5), [0, 1, 3, 4])
   assert.deepEqual(spreadSlots(2, 3), [0, 2])
   const ports = layoutEdgePorts(scenarios['fan-out listed out of order'])
-  assert.deepEqual(['a-b-1', 'a-c-2', 'a-d-0'].map(id => ports[id].sourceHandle), ['right-0', 'right-1', 'right-2'])
+  assert.deepEqual(['a::b::1', 'a::c::2', 'a::d::0'].map(id => ports[id].sourceHandle), ['right-0', 'right-1', 'right-2'])
 })
 
 test('a full side overflows to the next best side instead of sharing a point', () => {
@@ -110,9 +110,15 @@ test('a connection drawn from a chosen point keeps that point', () => {
     c: { position: { x: 400, y: 300 }, terminal: true },
   }
   const ports = layoutEdgePorts(nodes)
-  assert.deepEqual([ports['a-b-0'].sourceHandle, ports['a-b-0'].targetHandle], ['bottom-1', 'top-3'])
-  assert.equal(ports['a-c-1'].sourceSide, 'bottom')
-  assert.notEqual(ports['a-c-1'].sourceHandle, 'bottom-1', 'automatic arcs avoid pinned points')
+  assert.deepEqual([ports['a::b::0'].sourceHandle, ports['a::b::0'].targetHandle], ['bottom-1', 'top-3'])
+  assert.equal(ports['a::c::1'].sourceSide, 'bottom')
+  assert.notEqual(ports['a::c::1'].sourceHandle, 'bottom-1', 'automatic arcs avoid pinned points')
   const invalid = layoutEdgePorts({ a: { next: [{ goto: 'b', source_handle: 'bottom-9' } as any] }, b: { terminal: true } })
-  assert.match(invalid['a-b-0'].sourceHandle, /^(top|bottom|left|right)-\d$/)
+  assert.match(invalid['a::b::0'].sourceHandle, /^(top|bottom|left|right)-\d$/)
+})
+
+test('arc IDs stay unique when node IDs contain hyphens', () => {
+  const ports = layoutEdgePorts({ a: { next: [{ goto: 'b-c' }] }, 'a-b': { next: [{ goto: 'c' }] }, 'b-c': { terminal: true }, c: { terminal: true } })
+  assert.equal(Object.keys(ports).length, 2)
+  assert.notEqual(edgeId('a', 'b-c', 0), edgeId('a-b', 'c', 0))
 })

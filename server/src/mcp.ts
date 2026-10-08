@@ -12,10 +12,13 @@ Workflow model (workflow.yaml in the project folder):
 - Root: workflow {id, name, version, description}, start (node ID), max_steps, nodes.
 - Node: type: skill, label, description, skill.path (skills/<node>/SKILL.md), terminal (true for final states, which run nothing),
   next: ordered list of {goto, when?, label?}; the first transition whose \`when\` matches is taken.
-- Evaluation gate per node: output_schema (JSON Schema subset), checks (list of {when, message}),
-  max_attempts (the step is retried with feedback when evaluation fails), on_fail (node to route to after the last failed attempt).
-- Expressions: \`<path> <op> <literal>\` where path starts with output. or state. and op is ==, !=, <, <=, >, >=, in, not in.
-  state has input, outputs.<node>, feedback.<node>, attempts.<node>; \`.length\` gives a list/string length.
+- Evaluation per node (optional): every step returns JSON {"result": ..., "reason": "..."} and evaluation.type says what result is:
+  predicate (true/false), choice (exactly one of evaluation.options) or score (a number from 0 to 1). evaluation.question says what to decide.
+  Steps may also write files and other keys; only result drives the next step. An invalid result is retried with feedback up to
+  max_attempts, then routed to on_fail (or the run stops).
+- Arcs route on the result: predicate \`output.result == true\` / \`== false\`; choice \`output.result == "option"\`;
+  score \`output.result >= 0.8\` (also >, <, <=). Leave \`when\` empty on the last arc for "otherwise". Validation warns about results with no arc.
+- The \`when\` grammar is \`<path> <op> <literal>\` with ==, !=, <, <=, >, >=, in, not in; paths start with output. or state.
 
 Typical flow: create_project → upsert_node (with skill_markdown) for each step → set_transitions → upsert_node(terminal=true)
 → validate_project → export_plugin. Use open_editor to give the user the visual editor URL.`
@@ -40,7 +43,6 @@ export function openBrowser(url: string): void {
   spawn(command, args as string[], { stdio: 'ignore', detached: true }).unref()
 }
 
-const check = z.object({ when: z.string().describe('Expression, e.g. output.score >= 0.8'), message: z.string().optional() })
 const transition = z.object({ goto: z.string(), when: z.string().optional(), label: z.string().optional() })
 
 export function createMcpServer(context: Context): McpServer {
@@ -67,11 +69,16 @@ export function createMcpServer(context: Context): McpServer {
     ({ project_id, ...settings }) => projects.configureWorkflow(project_id, settings))
   tool('upsert_node', `Create or update a Skill node. Only given fields change.
 skill_markdown writes the node's SKILL.md (default path skills/<node_id>/SKILL.md).
-output_schema/checks/max_attempts/on_fail define the evaluation gate; pass {} / [] / "" to clear. The first node created becomes the start node.`,
+evaluation is {type: predicate|choice|score, question?, options? (choice only)}; pass null to remove it. max_attempts and on_fail
+apply when the result is invalid; on_fail: "" clears it. The first node created becomes the start node.`,
     {
       project_id: z.string(), node_id: z.string(), label: z.string().optional(), description: z.string().optional(),
       skill_markdown: z.string().optional(), skill_path: z.string().optional(), terminal: z.boolean().optional(),
-      output_schema: z.record(z.string(), z.any()).optional(), checks: z.array(check).optional(),
+      evaluation: z.object({
+        type: z.enum(['predicate', 'choice', 'score']),
+        question: z.string().optional().describe('What the step must decide, e.g. "Does the game pass all acceptance criteria?"'),
+        options: z.array(z.string()).optional().describe('Choice only: the possible results'),
+      }).nullable().optional(),
       max_attempts: z.number().int().min(1).max(20).optional(), on_fail: z.string().optional(),
       position: z.object({ x: z.number(), y: z.number() }).optional(),
     },

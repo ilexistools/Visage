@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { decide, matches, newStateData, parseOutput, validateSchema, type RunState, type Workflow } from '../src/engine.ts'
+import { contractFor, decide, evaluate, evaluationProblem, matches, newStateData, parseOutput, uncoveredResults, validateSchema, type RunState, type Workflow } from '../src/engine.ts'
 import { SCHEMA } from './helpers.ts'
 
 const state = (): RunState => ({ data: newStateData({}), attempts: {}, retries: {}, steps: 0 })
@@ -36,26 +36,56 @@ test('parseOutput accepts fenced and embedded JSON', () => {
   assert.deepEqual(parseOutput('plain text'), { text: 'plain text' })
 })
 
-test('decide retries with feedback, routes on_fail and enforces max_steps', () => {
+test('evaluation types define the result each step must return', () => {
+  assert.deepEqual(evaluate({ evaluation: { type: 'predicate' } }, { result: true, files: ['a.html'] }), [])
+  assert.deepEqual(evaluate({ evaluation: { type: 'predicate' } }, { result: 'yes' }), ['output.result must be of type boolean'])
+  assert.deepEqual(evaluate({ evaluation: { type: 'choice', options: ['approved', 'changes'] } }, { result: 'maybe' }), ['output.result must be one of ["approved","changes"]'])
+  assert.deepEqual(evaluate({ evaluation: { type: 'score' } }, { result: 1.2 }), ['output.result must be <= 1'])
+  assert.deepEqual(evaluate({ evaluation: { type: 'score' } }, { text: 'no json' }), ['output.result is required'])
+  assert.deepEqual(evaluate({}, { anything: 1 }), [])
+  assert.equal(evaluationProblem({ type: 'choice', options: ['only'] }), 'a choice evaluation needs at least two options')
+  assert.equal(evaluationProblem({ type: 'score', options: ['a', 'b'] }), 'options are only used by choice evaluations, not score')
+  assert.equal(evaluationProblem({ type: 'vote' }), 'evaluation type must be one of predicate, choice, score')
+  assert.equal(evaluationProblem({ type: 'choice', options: ['a', 'a'] }), 'choice options must be unique')
+  assert.equal(evaluationProblem({ type: 'predicate', question: 'Done?' }), null)
+  assert.deepEqual(contractFor({ evaluation: { type: 'choice', question: 'Ship it?', options: ['yes', 'no'] } })?.result, 'exactly one of ["yes","no"]')
+})
+
+test('uncovered results are reported per evaluation type', () => {
+  assert.deepEqual(uncoveredResults({ evaluation: { type: 'predicate' }, next: [{ goto: 'a', when: 'output.result == true' }] }), ['false'])
+  assert.deepEqual(uncoveredResults({ evaluation: { type: 'choice', options: ['x', 'y', 'z'] }, next: [{ goto: 'a', when: 'output.result == "x"' }, { goto: 'b', when: 'output.result in ["y"]' }] }), ['z'])
+  assert.deepEqual(uncoveredResults({ evaluation: { type: 'score' }, next: [{ goto: 'a', when: 'output.result >= 0.8' }, { goto: 'b', when: 'output.result < 0.5' }] }), ['scores such as 0.65'])
+  assert.deepEqual(uncoveredResults({ evaluation: { type: 'score' }, next: [{ goto: 'a', when: 'output.result >= 0.8' }, { goto: 'b' }] }), [])
+})
+
+test('decide retries invalid results with feedback, routes on_fail and on the result', () => {
   const workflow: Workflow = {
-    start: 'draft', max_steps: 4,
+    start: 'review', max_steps: 6,
     nodes: {
-      draft: { type: 'skill', checks: [{ when: 'output.score >= 0.8', message: 'Score too low' }], max_attempts: 2, on_fail: 'fix', next: [{ goto: 'done' }] },
-      fix: { type: 'skill', next: [{ goto: 'draft' }] },
+      review: { type: 'skill', evaluation: { type: 'score' }, max_attempts: 2, on_fail: 'fix', next: [{ goto: 'done', when: 'output.result >= 0.8' }, { goto: 'fix' }] },
+      fix: { type: 'skill', next: [{ goto: 'review' }] },
       done: { type: 'skill', terminal: true },
     },
   }
   const run = state()
-  assert.equal(decide(workflow, run, 'draft', { score: 0.1 }).status, 'retry')
-  assert.deepEqual(run.data.feedback.draft, ['Score too low'])
-  const routed = decide(workflow, run, 'draft', { score: 0.2 })
+  assert.equal(decide(workflow, run, 'review', { result: 'high' }).status, 'retry')
+  assert.deepEqual(run.data.feedback.review, ['output.result must be of type number'])
+  const routed = decide(workflow, run, 'review', { score: 0.9 })
   assert.deepEqual([routed.status, routed.next_node, routed.evaluation], ['next', 'fix', 'failed'])
-  assert.equal(decide(workflow, run, 'fix', { fixed: true }).next_node, 'draft')
-  const passed = decide(workflow, run, 'draft', { score: 0.9 })
+  assert.equal(decide(workflow, run, 'fix', { fixed: true }).next_node, 'review')
+  const low = decide(workflow, run, 'review', { result: 0.4, reason: 'missing tests' })
+  assert.deepEqual([low.status, low.next_node, low.evaluation], ['next', 'fix', 'passed'])
+  decide(workflow, run, 'fix', {})
+  const passed = decide(workflow, run, 'review', { result: 0.92 })
   assert.deepEqual([passed.status, passed.next_node], ['next', 'done'])
-  assert.equal(run.data.feedback.draft, undefined)
+  assert.equal(run.data.feedback.review, undefined)
   const looping: Workflow = { start: 'a', max_steps: 2, nodes: { a: { type: 'skill', next: [{ goto: 'a' }] }, end: { type: 'skill', terminal: true } } }
   const loop = state()
   assert.equal(decide(looping, loop, 'a', {}).status, 'next')
   assert.match(decide(looping, loop, 'a', {}).error ?? '', /max_steps/)
+})
+
+test('word operators need spaces, so run-together text is rejected', () => {
+  assert.throws(() => matches("output.within 'abc'", { output: { with: 'b' } }))
+  assert.ok(matches("output.with in 'abc'", { output: { with: 'b' } }))
 })

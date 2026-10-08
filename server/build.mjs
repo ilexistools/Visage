@@ -51,7 +51,7 @@ Visage stores workflows as projects (a folder with \`workflow.yaml\` and one \`s
 
 1. \`create_project\` (or \`list_projects\` to reuse one).
 2. For each step, \`upsert_node\` with a clear \`label\`, \`description\` and \`skill_markdown\` (the full instructions for that step). The first node becomes the start node.
-3. Add evaluation gates where quality matters: \`output_schema\` (required fields and types), \`checks\` (e.g. \`output.score >= 0.8\`), \`max_attempts\` and \`on_fail\`.
+3. When the next step depends on this one, give it an \`evaluation\`: \`predicate\` (true/false, e.g. "Does it pass the tests?"), \`choice\` (one of \`options\`, e.g. approved / changes / rejected) or \`score\` (0 to 1). Write the \`question\` the step answers. Steps only produce files? Leave the evaluation out. Use \`max_attempts\` and \`on_fail\` for invalid results.
 4. \`upsert_node\` with \`terminal: true\` for each final state, then \`set_transitions\` for every step. Order matters: the first transition whose \`when\` matches wins; leave \`when\` empty for the default.
 5. \`validate_project\` and fix every error.
 6. \`export_plugin\` to produce the plugin folder and zip.
@@ -60,9 +60,9 @@ Visage stores workflows as projects (a folder with \`workflow.yaml\` and one \`s
 
 Call \`open_editor\` (with \`project_id\` and \`open: true\` to launch the browser) and give the user the returned URL. Tell the user that edits made in the editor and through these tools affect the same files.
 
-## Expressions
+## Routing on the result
 
-\`<path> <op> <literal>\` where path starts with \`output.\` (the step output) or \`state.\` (\`input\`, \`outputs.<node>\`, \`feedback.<node>\`, \`attempts.<node>\`); ops are \`==\`, \`!=\`, \`<\`, \`<=\`, \`>\`, \`>=\`, \`in\`, \`not in\`; \`.length\` gives a list or string length.
+Every evaluated step returns \`{"result": ..., "reason": "..."}\`. Route with \`set_transitions\`: predicate \`output.result == true\` / \`output.result == false\`; choice \`output.result == "approved"\`; score \`output.result >= 0.8\` (also \`>\`, \`<\`, \`<=\`). Leave \`when\` empty on the last arc for "otherwise". \`validate_project\` warns about results that have no arc.
 `
 
 function assemblePlugin() {

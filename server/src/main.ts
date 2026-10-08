@@ -33,10 +33,13 @@ const basePort = Number(values.port)
 let localServer: Server | null = null
 let editorBase: string | null = null
 
+/** Is a Visage instance with the same data directory serving this port? */
 async function isVisage(port: number): Promise<boolean> {
   try {
     const response = await fetch(`http://${HOST}:${port}/api/health`, { signal: AbortSignal.timeout(1500) })
-    return (await response.json())?.app === 'visage'
+    const health = await response.json()
+    // Reuse only an instance that reads the same project catalog.
+    return health?.app === 'visage' && health.data_dir === dataDir()
   } catch {
     return false
   }

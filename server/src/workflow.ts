@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import yaml from 'js-yaml'
-import { checkSchemaDefinition, matches, normalizedChecks, type Workflow, type WorkflowNode } from './engine.ts'
+import { evaluationProblem, matches, uncoveredResults, type Workflow, type WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, inside } from './store.ts'
 
 export function parseWorkflow(source: string): Workflow {
@@ -40,6 +40,7 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
   }
   const readiness: string[] = []
   const warnings: string[] = []
+  if (typeof workflow.start !== 'string') fail('start must be a node ID')
   if (!Object.hasOwn(nodes, workflow.start)) readiness.push('Start node must exist')
   if (!Object.values(nodes).some(node => node?.terminal)) readiness.push('Workflow needs a terminal node')
   for (const [id, node] of Object.entries(nodes)) {
@@ -57,13 +58,19 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
     validateEvaluation(id, node, nodes)
     if (node.next !== undefined && !Array.isArray(node.next)) fail(`Transitions of ${id} must be a list`)
     for (const transition of node.next ?? []) {
-      if (typeof transition !== 'object' || transition === null || !Object.hasOwn(nodes, transition.goto)) fail(`Invalid transition target from ${id}`)
+      if (typeof transition !== 'object' || transition === null || typeof transition.goto !== 'string' || !Object.hasOwn(nodes, transition.goto)) fail(`Invalid transition target from ${id}`)
       if (transition.when !== undefined) expression(id, transition.when)
       for (const key of ['source_handle', 'target_handle'] as const) {
         if (transition[key] !== undefined && (typeof transition[key] !== 'string' || !/^(top|bottom|left|right)-\d+$/.test(transition[key]!))) fail(`Invalid ${key} on transition from ${id}: ${transition[key]}`)
       }
     }
     if (!node.terminal && !node.next?.length) warnings.push(`Node ${id} has no transitions`)
+    for (const legacy of ['output_schema', 'checks'] as const) {
+      if (node[legacy] !== undefined) warnings.push(`Node ${id}: ${legacy} is no longer used; choose a predicate, choice or score evaluation`)
+    }
+    const fallback = (node.next ?? []).findIndex(transition => transition.when === undefined)
+    if (fallback >= 0 && fallback < (node.next?.length ?? 0) - 1) warnings.push(`Node ${id}: arcs after the unconditional arc to ${node.next![fallback].goto} are never used`)
+    for (const result of uncoveredResults(node)) warnings.push(`Node ${id}: no arc for result ${result}`)
   }
   if (readiness.length && strict) fail(readiness.join('; '))
   if (Object.hasOwn(nodes, workflow.start)) {
@@ -91,13 +98,12 @@ function expression(nodeId: string, value: unknown): void {
 }
 
 function validateEvaluation(id: string, node: WorkflowNode, nodes: Record<string, WorkflowNode>): void {
-  if (node.output_schema !== undefined) {
-    try { checkSchemaDefinition(node.output_schema) } catch (error) { fail(`Node ${id}: ${(error as Error).message}`) }
+  if (node.evaluation !== undefined) {
+    if (node.terminal) fail(`Final node ${id} cannot have an evaluation`)
+    const problem = evaluationProblem(node.evaluation)
+    if (problem) fail(`Node ${id}: ${problem}`)
   }
-  let checks: { when: string }[] = []
-  try { checks = normalizedChecks(node) } catch (error) { fail(`Node ${id}: ${(error as Error).message}`) }
-  checks.forEach(check => expression(id, check.when))
   const attempts = node.max_attempts ?? 1
   if (!Number.isInteger(attempts) || attempts < 1 || attempts > 20) fail(`Node ${id}: max_attempts must be an integer between 1 and 20`)
-  if (node.on_fail != null && !Object.hasOwn(nodes, node.on_fail)) fail(`Node ${id}: on_fail must reference an existing node`)
+  if (node.on_fail != null && (typeof node.on_fail !== 'string' || !Object.hasOwn(nodes, node.on_fail))) fail(`Node ${id}: on_fail must reference an existing node`)
 }

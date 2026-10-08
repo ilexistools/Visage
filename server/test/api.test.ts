@@ -84,11 +84,22 @@ test('incomplete workflows save with warnings; structural errors are rejected', 
   const saved = await server.call('PUT', '/api/projects/partial/workflow', { source })
   assert.equal(saved.status, 200)
   assert.ok(saved.data.warnings.includes('Workflow needs a terminal node'))
-  for (const node of [{ on_fail: 'nope' }, { checks: ['bad expression'] }, { max_attempts: 0 }, { output_schema: { type: 'nope' } }]) {
+  for (const node of [{ on_fail: 'nope' }, { max_attempts: 0 }, { evaluation: { type: 'nope' } }, { evaluation: { type: 'choice', options: ['a'] } }, { evaluation: 'predicate' }, { next: [{ goto: 'a', when: 'bad expression' }] }]) {
     const bad = yaml.dump({ version: 1, start: 'a', nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, ...node } } })
     assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: bad })).status, 400, JSON.stringify(node))
   }
   assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: 'nodes: [' })).status, 400)
+  const warned = yaml.dump({ version: 1, start: 'a', nodes: {
+    a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, output_schema: { type: 'object' }, evaluation: { type: 'predicate' }, next: [{ goto: 'b', when: 'output.result == true' }] },
+    b: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, next: [{ goto: 'c' }, { goto: 'a' }] },
+    c: { type: 'skill', terminal: true },
+  } })
+  const warnings = (await server.call('PUT', '/api/projects/partial/workflow', { source: warned })).data.warnings
+  assert.ok(warnings.includes('Node a: output_schema is no longer used; choose a predicate, choice or score evaluation'), warnings)
+  assert.ok(warnings.includes('Node a: no arc for result false'), warnings)
+  assert.ok(warnings.includes('Node b: arcs after the unconditional arc to c are never used'), warnings)
+  const terminalEvaluation = yaml.dump({ version: 1, start: 'c', nodes: { c: { type: 'skill', terminal: true, evaluation: { type: 'predicate' } } } })
+  assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: terminalEvaluation })).status, 400)
 })
 
 test('serves the editor, falls back to index.html and rejects non-local hosts', async () => {
@@ -99,4 +110,38 @@ test('serves the editor, falls back to index.html and rejects non-local hosts', 
   assert.equal((await server.call('GET', '/api/nope')).status, 404)
   assert.equal((await server.call('GET', '/api/projects', undefined, { Origin: 'https://evil.example' })).status, 403)
   assert.equal((await server.call('GET', '/api/projects', undefined, { Origin: 'http://localhost:5173' })).status, 200)
+})
+
+test('other websites cannot drive the API through the browser', async () => {
+  const simple = { 'Content-Type': 'text/plain' }
+  assert.equal((await server.call('POST', '/api/projects', { id: 'csrf', name: 'x' }, { Origin: 'null', ...simple })).status, 403)
+  assert.equal((await server.call('POST', '/api/projects', { id: 'csrf', name: 'x' }, simple)).status, 415)
+  assert.equal((await server.call('GET', '/api/folder-picker', undefined, { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
+  assert.equal((await server.call('GET', '/api/projects', undefined, { 'Sec-Fetch-Site': 'same-origin' })).status, 200)
+  assert.equal((await server.call('GET', '/api/projects/%E0/workflow')).status, 400)
+  assert.equal((await server.call('POST', '/api/projects', { id: 'typed', name: 42 })).status, 400)
+})
+
+test('projects cannot be nested, and node IDs like constructor are ordinary nodes', async () => {
+  await server.call('POST', '/api/projects', { id: 'outer', name: 'Outer' })
+  const nested = await server.call('POST', '/api/projects', { id: 'inner', name: 'Inner', parent_path: projectDir('outer') })
+  assert.equal(nested.status, 400)
+  assert.match(nested.data.detail, /outside the project "Outer"/)
+  const { upsertNode, getWorkflow } = await import('../src/projects.ts')
+  const result = upsertNode('outer', 'constructor', { label: 'Constructor', skill_markdown: '# hi\n' })
+  assert.equal(result.created, true)
+  assert.equal(getWorkflow('outer').workflow.nodes['constructor' as string].label, 'Constructor')
+  assert.equal(({} as any).label, undefined, 'Object.prototype is untouched')
+  assert.throws(() => upsertNode('outer', 'notes', { skill_path: 'notes/a.md', skill_markdown: 'x' }), /SKILL\.md path/)
+  assert.ok(!existsSync(join(projectDir('outer'), 'notes/a.md')), 'nothing is written when the change is rejected')
+})
+
+test('concurrent processes do not lose catalog entries', async () => {
+  const { execFile } = await import('node:child_process')
+  const script = `import { createProject } from '${join(import.meta.dirname, '../src/projects.ts')}'; for (let i = 0; i < 15; i++) createProject({ id: 'p' + process.argv[2] + '-' + i, name: 'x' })`
+  const file = join(mkdtempSync(join(tmpdir(), 'visage-race-')), 'race.ts')
+  writeFileSync(file, script)
+  await Promise.all(['a', 'b', 'c'].map(tag => new Promise((resolve, reject) => execFile(process.execPath, ['--import', 'tsx', file, tag], { env: process.env }, error => error ? reject(error) : resolve(null)))))
+  const ids = (await server.call('GET', '/api/projects')).data.map((project: any) => project.id).filter((id: string) => /^p[abc]-/.test(id))
+  assert.equal(ids.length, 45)
 })

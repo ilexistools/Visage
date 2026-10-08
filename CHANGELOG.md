@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Per-node evaluation gates: output schema, checks, retries with feedback and failure routes.
+- Step evaluation standardised on three result types, predicate (true/false), choice (one option) and score (0 to 1), with retries with feedback, failure routes, arcs routed on the result and warnings for results without an arc. Replaces the free-form output schema and checks.
 - Plugin export with an orchestrator Skill and a runner that enforces the state machine.
 - MCP tools to create, edit, validate and export workflows, and to open the editor.
 

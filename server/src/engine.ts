@@ -6,7 +6,13 @@
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type JsonObject = { [key: string]: Json }
-export type Check = { when: string; message?: string }
+/**
+ * Every step is evaluated the same way: it returns `{"result": ..., "reason": "..."}` where
+ * result is true/false (predicate), one of the options (choice) or a number from 0 to 1 (score).
+ * Files and any other keys a step produces are free; only `result` drives the next step.
+ */
+export type EvaluationType = 'predicate' | 'choice' | 'score'
+export type Evaluation = { type: EvaluationType; question?: string; options?: string[] }
 /** source_handle / target_handle pin the arc to editor connection points; they do not affect execution. */
 export type Transition = { goto: string; when?: string; label?: string; source_handle?: string; target_handle?: string }
 export type WorkflowNode = {
@@ -16,8 +22,7 @@ export type WorkflowNode = {
   terminal?: boolean
   skill?: { path?: string }
   next?: Transition[]
-  output_schema?: JsonObject
-  checks?: (Check | string)[]
+  evaluation?: Evaluation
   max_attempts?: number
   on_fail?: string
   [key: string]: unknown
@@ -48,7 +53,8 @@ export type Decision = {
 
 export const DEFAULT_MAX_STEPS = 50
 const PATH = String.raw`(?:output|state)(?:\.[A-Za-z0-9_][A-Za-z0-9_-]*)*`
-const EXPRESSION = new RegExp(String.raw`^\s*(${PATH})\s*(==|!=|>=|<=|>|<|not in|in)\s*(.+?)\s*$`)
+// Word operators need surrounding spaces so `output.within 'x'` is not read as `output.with in 'x'`.
+const EXPRESSION = new RegExp(String.raw`^\s*(${PATH})(?:\s*(==|!=|>=|<=|>|<)\s*|\s+(not in|in)\s+)(.+?)\s*$`)
 const LITERALS: Record<string, Json> = { true: true, false: false, null: null, True: true, False: false, None: null }
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -87,7 +93,8 @@ export function equal(a: unknown, b: unknown): boolean {
 export function matches(expression: string, context: unknown): boolean {
   const match = EXPRESSION.exec(expression)
   if (!match) throw new Error(`Unsupported transition expression: ${expression}`)
-  const [, left, operator, rawRight] = match
+  const [, left, symbol, word, rawRight] = match
+  const operator = symbol ?? word
   const right = literal(rawRight)
   const value = resolve(context, left)
   if (operator === '==') return equal(value, right)
@@ -158,28 +165,62 @@ export function validateSchema(value: unknown, schema: Record<string, any>, path
   return errors
 }
 
-export function checkSchemaDefinition(schema: unknown): void {
-  if (!isObject(schema)) throw new Error('output_schema must be a JSON Schema object')
-  const options = schema.type === undefined ? [] : Array.isArray(schema.type) ? schema.type : [schema.type]
-  for (const option of options) if (typeof option !== 'string' || !TYPES[option]) throw new Error(`Unsupported schema type: ${option}`)
-  if (isObject(schema.properties)) Object.values(schema.properties).forEach(checkSchemaDefinition)
-  if (isObject(schema.items)) checkSchemaDefinition(schema.items)
+export const EVALUATION_TYPES: EvaluationType[] = ['predicate', 'choice', 'score']
+
+/** Describe what is wrong with an evaluation definition, or return null when it is valid. */
+export function evaluationProblem(evaluation: unknown): string | null {
+  if (!isObject(evaluation)) return 'evaluation must be an object with a type'
+  const unknown = Object.keys(evaluation).filter(key => !['type', 'question', 'options'].includes(key))
+  if (unknown.length) return `evaluation has unknown keys: ${unknown.join(', ')}`
+  if (!EVALUATION_TYPES.includes(evaluation.type as EvaluationType)) return `evaluation type must be one of ${EVALUATION_TYPES.join(', ')}`
+  if (evaluation.question !== undefined && typeof evaluation.question !== 'string') return 'evaluation question must be text'
+  if (evaluation.type === 'choice') {
+    const options = evaluation.options
+    if (!Array.isArray(options) || options.length < 2) return 'a choice evaluation needs at least two options'
+    if (options.some(option => typeof option !== 'string' || !option.trim())) return 'choice options must be non-empty text'
+    if (new Set(options).size !== options.length) return 'choice options must be unique'
+  } else if (evaluation.options !== undefined) {
+    return `options are only used by choice evaluations, not ${evaluation.type}`
+  }
+  return null
 }
 
-export function normalizedChecks(node: WorkflowNode): Required<Check>[] {
-  return (node.checks ?? []).map(raw => {
-    const check = typeof raw === 'string' ? { when: raw } : raw
-    if (!isObject(check) || typeof check.when !== 'string') throw new Error("Each check needs a 'when' expression")
-    return { when: check.when, message: check.message || `Check failed: ${check.when}` }
-  })
+/** JSON Schema of the output object for an evaluation. */
+export function resultSchema(evaluation: Evaluation): Record<string, any> {
+  const result = evaluation.type === 'predicate' ? { type: 'boolean' }
+    : evaluation.type === 'choice' ? { type: 'string', enum: evaluation.options ?? [] }
+    : { type: 'number', minimum: 0, maximum: 1 }
+  return { type: 'object', required: ['result'], properties: { result, reason: { type: 'string' } } }
 }
 
-/** Return the evaluation errors for a node output; an empty list means it passed. */
-export function evaluate(node: WorkflowNode, output: JsonObject, context: unknown): string[] {
-  const errors: string[] = []
-  if (isObject(node.output_schema)) errors.push(...validateSchema(output, node.output_schema))
-  for (const check of normalizedChecks(node)) if (!matches(check.when, context)) errors.push(check.message)
-  return errors
+/** The output contract given to the agent for a step, or null when the step has no evaluation. */
+export function contractFor(node: WorkflowNode) {
+  const evaluation = node.evaluation
+  if (!evaluation) return null
+  const example: JsonObject = { result: evaluation.type === 'predicate' ? true : evaluation.type === 'choice' ? (evaluation.options?.[0] ?? '') : 0.8, reason: 'One or two sentences explaining the result.' }
+  const result = evaluation.type === 'predicate' ? 'true or false'
+    : evaluation.type === 'choice' ? `exactly one of ${JSON.stringify(evaluation.options ?? [])}`
+    : 'a number from 0 to 1'
+  return { type: evaluation.type, ...(evaluation.question ? { question: evaluation.question } : {}), ...(evaluation.options ? { options: evaluation.options } : {}), result, example }
+}
+
+/** Results of an evaluation that no transition handles, described for warnings. */
+export function uncoveredResults(node: WorkflowNode): string[] {
+  const evaluation = node.evaluation
+  if (!evaluation || node.terminal || !node.next?.length) return []
+  const reaches = (result: Json) => {
+    try { return nextNode(node, { output: { result }, state: {} }) !== null } catch { return true }
+  }
+  if (evaluation.type === 'predicate') return [true, false].filter(value => !reaches(value)).map(String)
+  if (evaluation.type === 'choice') return (evaluation.options ?? []).filter(option => !reaches(option))
+  const missing = Array.from({ length: 101 }, (_, index) => index / 100).filter(value => !reaches(value))
+  if (!missing.length) return []
+  return [`scores such as ${missing[Math.floor(missing.length / 2)]}`]
+}
+
+/** Return the evaluation errors for a step output; an empty list means it passed. */
+export function evaluate(node: WorkflowNode, output: JsonObject): string[] {
+  return node.evaluation ? validateSchema(output, resultSchema(node.evaluation)) : []
 }
 
 /** Parse step output as JSON, accepting fenced or embedded objects. */
@@ -230,7 +271,7 @@ function decideOnce(workflow: Workflow, state: RunState, nodeId: string, output:
   data.outputs[nodeId] = output
   data.last_output = output
   const context = contextFor(state, output)
-  const errors = evaluate(node, output, context)
+  const errors = evaluate(node, output)
   if (errors.length) {
     state.retries[nodeId] = (state.retries[nodeId] ?? 0) + 1
     data.feedback[nodeId] = errors

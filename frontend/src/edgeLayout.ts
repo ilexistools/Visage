@@ -45,7 +45,8 @@ const CROWDING_PENALTY = 0.12
 const PAIR_AFFINITY = 0.6
 
 export const defaultPosition = (index: number): Point => ({ x: 100 + (index % 3) * 260, y: 120 + Math.floor(index / 3) * 190 })
-export const edgeId = (source: string, target: string, index: number) => `${source}-${target}-${index}`
+/** Node IDs never contain ':', so `a`->`b-c` and `a-b`->`c` cannot share an arc ID. */
+export const edgeId = (source: string, target: string, index: number) => `${source}::${target}::${index}`
 
 type Endpoint = { edge: string; node: string; other: string; role: 'source' | 'target'; side?: PortSide; slot?: number; pairRank: number }
 

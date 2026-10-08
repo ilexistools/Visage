@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { randomBytes } from 'node:crypto'
-import { decide, newStateData, normalizedChecks, parseOutput, type Json, type RunState, type Workflow } from '../engine.ts'
+import { contractFor, decide, newStateData, parseOutput, type Json, type RunState, type Workflow } from '../engine.ts'
 
 type PortableWorkflow = Workflow & { plugin: string }
 type State = RunState & { run_id: string; current_node: string; run_status: 'running' | 'completed' | 'failed'; error?: string; created_at: string; updated_at?: string }
@@ -26,6 +26,12 @@ function fail(message: string): never {
   process.exit(1)
 }
 
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/
+function checkedRunId(runId: string): string {
+  if (!RUN_ID.test(runId) || runId === 'LATEST') fail(`Invalid run ID: ${runId} (use letters, digits, - and _)`)
+  return runId
+}
+
 const stateRoot = (stateDir?: string) => resolve(stateDir || process.env.VISAGE_STATE_DIR || join(process.cwd(), '.visage', 'runs', WORKFLOW.plugin))
 
 function runPath(stateDir: string | undefined, runId?: string): string {
@@ -34,6 +40,7 @@ function runPath(stateDir: string | undefined, runId?: string): string {
     if (!existsSync(join(root, 'LATEST'))) fail("No run found. Start one with the 'start' command.")
     runId = readFileSync(join(root, 'LATEST'), 'utf8').trim()
   }
+  checkedRunId(runId)
   const path = join(root, runId)
   if (!existsSync(join(path, 'state.json'))) fail(`Run not found: ${runId}`)
   return path
@@ -66,11 +73,10 @@ function instruction(path: string, state: State) {
   if (node.terminal || state.run_status !== 'running') return summary(path, state)
   const stepDir = join(SKILL_DIR, 'nodes', nodeId)
   const outputFile = join(path, 'outputs', `${String(state.steps + 1).padStart(3, '0')}-${nodeId}.json`)
+  mkdirSync(dirname(outputFile), { recursive: true })
   const artifactDir = join(path, 'artifacts')
   mkdirSync(artifactDir, { recursive: true })
-  const contract: Record<string, unknown> = {}
-  if (node.output_schema) contract.schema = node.output_schema
-  if (node.checks?.length) contract.checks = normalizedChecks(node)
+  const contract = contractFor(node)
   return {
     status: 'awaiting_output',
     run_id: state.run_id,
@@ -81,13 +87,14 @@ function instruction(path: string, state: State) {
     max_attempts: node.max_attempts ?? 1,
     step_file: join(stepDir, 'STEP.md'),
     resources_dir: stepDir,
-    feedback: state.data.feedback[nodeId] ?? [],
+    // Feedback belongs to the attempt being retried, not to a later visit of the same step.
+    feedback: state.retries[nodeId] ? state.data.feedback[nodeId] ?? [] : [],
     input: state.data.input,
     previous_outputs: state.data.outputs,
-    output_contract: contract,
+    ...(contract ? { output_contract: contract } : {}),
     artifact_dir: artifactDir,
     output_file: outputFile,
-    submit: `node "${SCRIPT}" submit --run ${state.run_id} --state-dir "${dirname(path)}" --output-file "${outputFile}"`,
+    submit: `node "${SCRIPT}" submit --run "${state.run_id}" --state-dir "${dirname(path)}" --output-file "${outputFile}"`,
   }
 }
 
@@ -102,7 +109,7 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
     else if (values.input) {
       try { input = JSON.parse(values.input) } catch { input = { text: values.input } }
     }
-    const runId = values.run || `run-${randomBytes(5).toString('hex')}`
+    const runId = checkedRunId(values.run || `run-${randomBytes(5).toString('hex')}`)
     const root = stateRoot(values['state-dir'])
     const path = join(root, runId)
     if (existsSync(join(path, 'state.json'))) fail(`Run already exists: ${runId}`)

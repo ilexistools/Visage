@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
 export type Project = { id: string; name: string; created_at: string; root_path: string }
@@ -48,6 +48,46 @@ export function saveProjects(projects: Project[]): void {
   writeJson(registryPath(), { projects })
 }
 
+const LOCK_STALE_MS = 15_000
+const LOCK_TIMEOUT_MS = 10_000
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * Run a read-modify-write under a lock file, so concurrent Visage processes (one per
+ * harness session) do not overwrite each other's changes. Stale locks are taken over.
+ */
+export function withLock<T>(target: string, run: () => T): T {
+  const lock = `${target}.lock`
+  mkdirSync(dirname(lock), { recursive: true })
+  const started = Date.now()
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx'))
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) { rmSync(lock, { force: true }); continue }
+      } catch { continue }
+      if (Date.now() - started > LOCK_TIMEOUT_MS) throw new HttpError(503, 'Another Visage process is busy with this file; try again')
+      sleep(15)
+    }
+  }
+  try {
+    return run()
+  } finally {
+    rmSync(lock, { force: true })
+  }
+}
+
+/** Change the project catalog atomically across processes. */
+export const updateProjects = <T>(change: (projects: Project[]) => { projects: Project[]; result: T }): T =>
+  withLock(registryPath(), () => {
+    const { projects, result } = change(readJson<{ projects: Project[] }>(registryPath(), { projects: [] }).projects)
+    saveProjects(projects)
+    return result
+  })
+
 export function findProject(id: string): Project | undefined {
   checkedId(id)
   return listProjects().find(project => project.id === id)
@@ -62,10 +102,22 @@ export function projectDir(id: string): string {
 export const workflowPath = (id: string) => join(projectDir(id), 'workflow.yaml')
 export const defaultProjectsDir = () => join(dataDir(), 'projects')
 
-/** Resolve a path inside a base folder, rejecting traversal. */
+const within = (root: string, target: string) => target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
+
+/**
+ * Resolve a path inside a base folder, rejecting traversal, including through symbolic
+ * links: the deepest existing part of the path must really be inside the folder.
+ */
 export function inside(base: string, relative: string): string {
   const root = resolve(base)
   const target = resolve(root, relative)
-  if (target !== root && !target.startsWith(root + '/') && !target.startsWith(root + '\\')) throw badRequest('Path escapes the project folder')
+  if (!within(root, target)) throw badRequest('Path escapes the project folder')
+  if (existsSync(root)) {
+    let existing = target
+    while (!existsSync(existing) && existing !== root) existing = dirname(existing)
+    if (!within(realpathSync(root), realpathSync(existing))) throw badRequest('Path escapes the project folder')
+  }
   return target
 }
+
+export const isInside = within
