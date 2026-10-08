@@ -1,6 +1,6 @@
 # Visage MCP tools
 
-The `visage` MCP server exposes 18 tools. Every result is JSON text, except `read_file` and `export_diagram`, which return plain text. A failed call returns an error result whose text says what is wrong (for example `Node not found: nope`); nothing is changed when a call fails.
+The `visage` MCP server exposes 19 tools. Every result is JSON text, except `read_file` and `export_diagram`, which return plain text. A failed call returns an error result whose text says what is wrong (for example `Node not found: nope`); nothing is changed when a call fails.
 
 Changes are written to disk immediately and are visible in the visual editor. Several sessions can use Visage at the same time: edits to one project are serialised with a lock, but the last edit wins.
 
@@ -125,6 +125,14 @@ Example for the review step above:
   "warnings": ["Workflow needs a terminal node", "Skill not found for review: skills/review/SKILL.md", "Node review: no arc for result changes"] }
 ```
 `errors` has at most one entry, which joins every issue that blocks export with `; `. Those issues are also listed one by one in `warnings`, together with the design warnings. `ready: true` with warnings still exports, but a warning such as `no arc for result changes` means a run that returns `changes` fails. Fix warnings unless the user accepts them.
+
+### `test_workflow`
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `project_id` | string, required | |
+| `scenarios` | string | Scenarios YAML to run instead of the project's `scenarios.yaml`; it is not saved. |
+
+Simulates scenarios without running any agent: each scenario scripts the results of the steps and the path it expects. Returns `{ "total", "passed", "failed", "results": [{ "name", "passed", "status", "path", "final", "error", "steps", "mismatches" }] }`. Save scenarios with `write_file` to `scenarios.yaml`. The format and good practice are in [testing.md](testing.md).
 
 ## Files
 

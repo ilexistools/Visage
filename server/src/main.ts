@@ -18,6 +18,12 @@ import { VERSION } from './version.ts'
 const HOST = '127.0.0.1'
 const PORT_TRIES = 10
 
+// `visage.js conformance ...` runs the harness conformance kit instead of the server.
+if (process.argv[2] === 'conformance') {
+  const { conformanceCli } = await import('./conformance.ts')
+  process.exit(await conformanceCli(process.argv.slice(3)))
+}
+
 const { values } = parseArgs({
   options: {
     stdio: { type: 'boolean', default: false },

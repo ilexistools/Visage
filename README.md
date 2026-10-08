@@ -27,8 +27,9 @@ flowchart LR
 
 - **Visual editor**: drag steps, connect them, choose curved, straight or orthogonal lines, and edit each step's Skill in a Markdown editor with its reference files (PDFs, examples, code).
 - **Typed evaluations**: `predicate` (true or false), `choice` (one option from a list) or `score` (0 to 1), with retries, failure routes, and warnings for results that have nowhere to go.
-- **MCP server**: 18 tools let Claude Code, Codex or any MCP client create, edit, validate and export workflows, and open the editor on the project they are working on.
+- **MCP server**: 19 tools let Claude Code, Codex or any MCP client create, edit, validate and export workflows, and open the editor on the project they are working on.
 - **Portable plugins**: an export runs without Visage. It needs only Node.js, in Claude Code, in Codex, or with any agent that can run shell commands.
+- **Testing**: scenarios check that scripted results take the path you designed, instantly and without an agent; a conformance kit runs a probe workflow through Claude Code, Codex or any CLI and audits that the agent followed every transition.
 - **Shareable output**: export the canvas as a PNG or the flow as a Mermaid diagram for READMEs and pull requests.
 - **Single process**: one Node.js file serves the editor, a REST API and MCP over stdio and HTTP. Visage itself installs as a plugin.
 
@@ -83,6 +84,23 @@ blog-post/
   dist/blog-post/           # exported plugin
 ```
 
+## Testing
+
+**Scenarios** script each step's result and the path you expect. They run in the editor (flask button), through the `test_workflow` MCP tool, or in CI, with the same rules as the exported runner:
+
+```yaml
+scenarios:
+  - name: Approved after one revision
+    results: {review: [changes, approved]}
+    expect: {path: [plan, draft, review, draft, review, publish]}
+```
+
+**Conformance** checks a harness with real runs of a probe workflow. Random canaries prove each step was read, and the runner's audit trail proves every transition was followed:
+
+```bash
+node server/build/visage.js conformance --harness claude --model claude-sonnet-5-5
+```
+
 ## Documentation
 
 | | |
@@ -92,6 +110,7 @@ blog-post/
 | [Workflow format](docs/harness/references/workflow-format.md) | `workflow.yaml`, evaluations, condition expressions, validation messages |
 | [Authoring guide](docs/harness/references/authoring-guide.md) | How to design steps, write their Skills and handle loops, with patterns |
 | [Exported plugins](docs/harness/references/exported-plugins.md) | Plugin contents and the runner protocol |
+| [Testing](docs/harness/references/testing.md) | Workflow scenarios and the harness conformance kit |
 
 These files also ship inside the Visage plugin, so agents read them directly.
 

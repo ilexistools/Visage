@@ -91,4 +91,4 @@ The submitted text is read as JSON. A fenced ```` ```json ```` block or the oute
 
 ## Run state
 
-Runs are kept in `.visage/runs/<plugin>/<run-id>/` under the working directory (`--state-dir` or `VISAGE_STATE_DIR` change it): `state.json`, `history.jsonl`, every submitted output in `outputs/` and the step artifacts in `artifacts/`. A run can be continued later with `next`, even from another session.
+Runs are kept in `.visage/runs/<plugin>/<run-id>/` under the working directory (`--state-dir` or `VISAGE_STATE_DIR` change it): `state.json`, `history.jsonl` (one `start` or `submit` event per line, with the decision, errors and result of each submission; see [testing.md](testing.md)), every submitted output in `outputs/` and the step artifacts in `artifacts/`. A run can be continued later with `next`, even from another session.

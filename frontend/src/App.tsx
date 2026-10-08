@@ -5,9 +5,10 @@ import { toPng } from 'html-to-image'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, FlaskConical, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
 import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
+import { TestsPanel } from './TestsPanel'
 import { conditionSummary } from './evaluation'
 import { defaultPosition, edgeId, layoutEdgePorts, parsePortId, PORT_SLOTS, portId, routeCenter, type EdgePorts, type PortSide } from './edgeLayout'
 
@@ -38,7 +39,7 @@ function InlineText({ value, onCommit, tag = 'span', className = '', title, plac
 
 function FlowNode({ data, selected }: any) {
   const used = new Set<string>(data.usedHandles || [])
-  return <div className={`flow-node ${data.kind} ${data.isFinal ? 'final' : ''} ${data.status || ''} ${selected ? 'selected' : ''}`}>
+  return <div className={`flow-node ${data.kind} ${data.isFinal ? 'final' : ''} ${data.status || ''} ${selected ? 'selected' : ''} ${data.inPath ? 'in-path' : ''}`}>
     {data.isInitial && <svg className="initial-state-arrow" viewBox="0 0 24 30" aria-label="Initial state"><path d="M1 1 L22 15 L1 29 Z" fill="none" stroke="#42536a" strokeWidth={1.5} strokeLinejoin="round" /></svg>}
     {(Object.keys(PORT_SLOTS) as PortSide[]).flatMap(side => PORT_SLOTS[side].map((offset, slot) => <FlowPort key={portId(side, slot)} id={portId(side, slot)} side={side} offset={offset} used={used.has(portId(side, slot))} />))}
     <InlineText tag="strong" className="flow-node-title" value={data.label} onCommit={data.onLabelChange} title={data.label ? `${data.label}\n\nDouble-click to edit label` : 'Double-click to edit label'} />
@@ -224,6 +225,9 @@ export default function App() {
     } catch (e) { tell(e) } finally { setBusy(false) }
   }
   const pendingSaveRef = useRef<null | (() => Promise<boolean>)>(null)
+  const [testsOpen, setTestsOpen] = useState(false)
+  // Nodes on the path of the scenario selected in the Tests panel.
+  const [highlightedPath, setHighlightedPath] = useState<string[]>([])
   const [appVersion, setAppVersion] = useState('')
   useEffect(() => { api<{ version?: string }>('/health').then(health => setAppVersion(health.version ?? '')).catch(() => {}) }, [])
   // Validation warnings are listed on demand instead of popping up after every save.
@@ -262,7 +266,7 @@ export default function App() {
     const mappedNodes: Node[] = Object.entries(workflow.nodes || {}).map(([id, node], index) => ({
       id, type: 'vasm', position: node.position || defaultPosition(index),
       data: {
-        nodeId: id, kind: 'skill', label: node.label || defaultNodeLabel(node.type), description: node.description || '', skill: node.skill?.path, terminal: node.terminal, isInitial: workflow.start === id, isFinal: !!node.terminal,
+        nodeId: id, kind: 'skill', inPath: highlightedPath.includes(id), label: node.label || defaultNodeLabel(node.type), description: node.description || '', skill: node.skill?.path, terminal: node.terminal, isInitial: workflow.start === id, isFinal: !!node.terminal,
         onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], label } } })); setDirty(true) },
         onDescriptionChange: (description: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], description } } })); setDirty(true) },
         usedHandles: Object.entries(workflow.nodes || {}).flatMap(([source, sourceNode]) => (sourceNode.terminal ? [] : sourceNode.next || []).flatMap((next: any, index: number) => {
@@ -283,7 +287,7 @@ export default function App() {
       return { ...node, selected: node.id === selectedNode, ...(live?.dragging ? { position: live.position, dragging: true } : {}) }
     }))
     setEdges(mappedEdges)
-  }, [workflow, lineStyle, selectedNode, setNodes, setEdges])
+  }, [workflow, lineStyle, selectedNode, highlightedPath, setNodes, setEdges])
 
   /** Merge a patch into the latest node state; keys set to undefined are removed. */
   const updateNode = (id: string, patch: Record<string, unknown>) => {
@@ -587,7 +591,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><button className="icon-plain explorer-toggle" aria-label={explorerCollapsed ? 'Show Explorer' : 'Hide Explorer'} aria-pressed={!explorerCollapsed} title={`${explorerCollapsed ? 'Show' : 'Hide'} Explorer (${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}B)`} onClick={toggleExplorer}>{explorerCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion && <span className="app-version" title={`Visage ${appVersion}`}>v{appVersion}</span>}</div>
-      <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<div className="export-wrap"><button className="button subtle icon-button" data-tooltip="Export" aria-label="Export" aria-haspopup="menu" aria-expanded={exportMenuOpen} onClick={() => setExportMenuOpen(open => !open)} disabled={!projectId || busy}><Package size={15} /></button>{exportMenuOpen && <div className="project-menu export-menu" role="menu">
+      <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<button className="button subtle icon-button" data-tooltip="Tests" aria-label="Tests" aria-pressed={testsOpen} onClick={async () => { if (!testsOpen && (dirty || yamlDirty) && !(await saveWorkflow())) return; setTestsOpen(open => !open) }} disabled={!projectId}><FlaskConical size={15} /></button><div className="export-wrap"><button className="button subtle icon-button" data-tooltip="Export" aria-label="Export" aria-haspopup="menu" aria-expanded={exportMenuOpen} onClick={() => setExportMenuOpen(open => !open)} disabled={!projectId || busy}><Package size={15} /></button>{exportMenuOpen && <div className="project-menu export-menu" role="menu">
         <button role="menuitem" onClick={exportPlugin}><Package size={14} /><span><strong>Plugin</strong><small>Claude Code and Codex (.zip)</small></span></button>
         <button role="menuitem" onClick={exportImage}><ImageIcon size={14} /><span><strong>Image</strong><small>The flow as shown (.png)</small></span></button>
         <button role="menuitem" onClick={exportDiagram}><FileCode2 size={14} /><span><strong>Diagram</strong><small>Mermaid, for READMEs and docs (.mmd)</small></span></button>
@@ -654,6 +658,7 @@ export default function App() {
         </div>
       </aside>}
     </div>
+    {testsOpen && projectId && <TestsPanel key={projectId} projectId={projectId} labels={Object.fromEntries(Object.entries(workflow.nodes).map(([id, node]: [string, any]) => [id, node.label || id]))} onClose={() => setTestsOpen(false)} onHighlight={setHighlightedPath} onSaved={async () => setFiles(await api(`/projects/${projectId}/files`))} />}
     {skillEditorOpen && <section className="skill-editor-drawer" aria-label="Skill Markdown editor"><header className="skill-editor-header"><div><span className="eyebrow">SKILL · {skillEditorLabel}</span><h2>Markdown editor</h2></div><div className="skill-editor-header-actions"><button className="button subtle preview-toggle" aria-label={skillPreview ? 'Edit Markdown' : 'Preview Markdown'} onClick={() => setSkillPreview(value => !value)}>{skillPreview ? <Code2 size={15} /> : <Eye size={15} />}{skillPreview ? 'Edit' : 'Preview'}</button><button className="icon-plain" aria-label="Close Skill editor" title="Close" onClick={closeSkillEditor}>×</button></div></header>{skillPreview ? <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: renderedSkillMarkdown }} /> : <div className="skill-markdown-editor"><Editor height="100%" language="markdown" theme="vs-light" value={skillMarkdown} onChange={value => { setSkillMarkdown(value || ''); setSkillDirty(true) }} options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, wordWrap: 'on' }} /></div>}<footer className="skill-editor-footer"><span className={skillBusy || skillDirty ? 'unsaved' : 'saved'}>{skillBusy || skillDirty ? 'Saving…' : 'Saved'}</span></footer></section>}
     {dialog && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setDialog(null) }}><form className={`modal ${dialog.kind === 'project' ? 'project-create-modal' : ''}`} onSubmit={event => { event.preventDefault(); submitDialog() }}>
       <span className="eyebrow">{dialog.kind === 'project' ? 'NEW PROJECT' : dialog.kind === 'rename' ? 'RENAME PROJECT' : 'DELETE PROJECT'}</span>

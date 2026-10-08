@@ -31,7 +31,8 @@ Visage keeps workflows as **projects**: a folder with `workflow.yaml` (the state
 
    Order matters: the first arc whose `when` matches is taken. Leave `when` out of the last arc to make it the "otherwise" arc.
 7. `validate_project`. `ready: false` lists errors that block export. Warnings such as `no arc for result false` mean the exported workflow would fail on that result: fix them unless the user explicitly accepts them.
-8. `export_plugin` and give the user the plugin folder and zip paths, with how to install it (see [exported-plugins.md](references/exported-plugins.md)).
+8. Write `scenarios.yaml` (one scenario per result of each evaluated step, each loop exit and each `on_fail` route) and run `test_workflow` until every scenario passes. See [testing.md](references/testing.md).
+9. `export_plugin` and give the user the plugin folder and zip paths, with how to install it (see [exported-plugins.md](references/exported-plugins.md)).
 
 ## Other tasks
 

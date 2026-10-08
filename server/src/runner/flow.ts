@@ -48,13 +48,16 @@ function runPath(stateDir: string | undefined, runId?: string): string {
 
 const load = (path: string): State => JSON.parse(readFileSync(join(path, 'state.json'), 'utf8'))
 
-function save(path: string, state: State): void {
+/** One line per event in history.jsonl: the audit trail used to check that a harness followed the workflow. */
+type HistoryEvent = { event: 'start' } | { event: 'submit'; node: string; attempt: number; decision: string; errors: string[]; result?: Json; next_node?: string }
+
+function save(path: string, state: State, event: HistoryEvent): void {
   state.updated_at = now()
   mkdirSync(path, { recursive: true })
   const temp = join(path, `state.json.${randomBytes(4).toString('hex')}.tmp`)
   writeFileSync(temp, JSON.stringify(state, null, 2) + '\n')
   renameSync(temp, join(path, 'state.json'))
-  appendFileSync(join(path, 'history.jsonl'), JSON.stringify({ timestamp: state.updated_at, status: state.run_status, node: state.current_node }) + '\n')
+  appendFileSync(join(path, 'history.jsonl'), JSON.stringify({ timestamp: state.updated_at, ...event, status: state.run_status, current_node: state.current_node }) + '\n')
 }
 
 function summary(path: string, state: State) {
@@ -118,7 +121,7 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
       data: newStateData(input), attempts: {}, retries: {}, steps: 0, created_at: now(),
     }
     settle(state)
-    save(path, state)
+    save(path, state, { event: 'start' })
     writeFileSync(join(root, 'LATEST'), runId)
     emit(instruction(path, state))
   },
@@ -145,7 +148,11 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
       state.current_node = decision.next_node!
       settle(state)
     }
-    save(path, state)
+    save(path, state, {
+      event: 'submit', node: nodeId, attempt: state.attempts[nodeId], decision: decision.status, errors: decision.errors,
+      ...(output.result !== undefined ? { result: output.result } : {}),
+      ...(decision.next_node ? { next_node: decision.next_node } : {}),
+    })
     emit({
       decision: decision.status, evaluated_node: nodeId, errors: decision.errors,
       ...(decision.status === 'next' ? { next_node: decision.next_node } : {}),

@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { exportPlugin } from './exporter.ts'
 import { createMcpServer } from './mcp.ts'
 import { workflowToMermaid } from './mermaid.ts'
+import { getScenarios, testWorkflow } from './scenarios.ts'
 import * as projects from './projects.ts'
 import { badRequest, dataDir, HttpError, inside, notFound } from './store.ts'
 import { VERSION } from './version.ts'
@@ -119,6 +120,8 @@ const routes: Route[] = [
   ['GET', new RegExp(`^/api/projects/${id}/workflow$`), (_, [pid]) => projects.getWorkflow(pid)],
   ['PUT', new RegExp(`^/api/projects/${id}/workflow$`), async (_, [pid], body) => projects.putWorkflow(pid, (await body())?.source ?? '')],
   ['GET', new RegExp(`^/api/projects/${id}/validate$`), (_, [pid]) => projects.validateProject(pid)],
+  ['GET', new RegExp(`^/api/projects/${id}/scenarios$`), (_, [pid]) => getScenarios(pid)],
+  ['POST', new RegExp(`^/api/projects/${id}/test$`), async (_, [pid], body) => testWorkflow(pid, (await body())?.source)],
   ['POST', new RegExp(`^/api/projects/${id}/export$`), async (_, [pid], body) => exportPlugin(pid, (await body())?.output_dir)],
   ['GET', new RegExp(`^/api/projects/${id}/export\\.zip$`), (_, [pid]) => {
     const result = exportPlugin(pid)

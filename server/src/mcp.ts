@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { exportPlugin } from './exporter.ts'
 import { workflowToMermaid } from './mermaid.ts'
+import { SCENARIOS_FILE, testWorkflow } from './scenarios.ts'
 import * as projects from './projects.ts'
 import { badRequest } from './store.ts'
 import { VERSION } from './version.ts'
@@ -93,6 +94,10 @@ apply when the result is invalid; on_fail: "" clears it. The first node created 
     ({ project_id, node_id, transitions }) => projects.setTransitions(project_id, node_id, transitions))
   tool('set_start', 'Make a node the initial state.', { project_id: z.string(), node_id: z.string() }, ({ project_id, node_id }) => projects.setStart(project_id, node_id))
   tool('validate_project', 'Check whether the workflow is ready to export; returns errors and warnings.', { project_id: z.string() }, ({ project_id }) => projects.validateProject(project_id))
+
+  tool('test_workflow', `Simulate scenarios without running any agent: scripted step results must produce the expected path. Uses ${SCENARIOS_FILE} in the project, or the YAML given in scenarios (not saved). Returns pass/fail, the path taken and mismatches per scenario.`,
+    { project_id: z.string(), scenarios: z.string().optional().describe('Scenarios YAML to run instead of the saved file') },
+    ({ project_id, scenarios }) => testWorkflow(project_id, scenarios))
 
   tool('list_files', 'List files in the project folder.', { project_id: z.string() }, ({ project_id }) => projects.listFiles(project_id))
   tool('read_file', 'Read a text file from the project (Skills, references, workflow.yaml).',

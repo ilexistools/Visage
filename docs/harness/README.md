@@ -2,7 +2,7 @@
 
 Visage lets an agent (Claude Code, Codex or any MCP client) design state-machine workflows of Skills, show them in a visual editor and export them as plugins. It ships as one plugin that contains:
 
-- the **`visage` MCP server**: 18 tools to create, edit, validate and export workflows;
+- the **`visage` MCP server**: 19 tools to create, edit, validate, test and export workflows;
 - the **`visage` Skill**: tells the agent how to use those tools well;
 - the **visual editor**, served by the same process at `http://127.0.0.1:4317`.
 
@@ -58,6 +58,7 @@ When several sessions start Visage, the first one serves the editor and the othe
 | [references/workflow-format.md](references/workflow-format.md) | Reading or writing `workflow.yaml`, expressions, validation messages. |
 | [references/authoring-guide.md](references/authoring-guide.md) | Designing a workflow and writing step Skills. |
 | [references/exported-plugins.md](references/exported-plugins.md) | Installing an exported workflow and its run protocol. |
+| [references/testing.md](references/testing.md) | Testing routing with scenarios, and checking a harness with the conformance kit. |
 
 ## Security
 

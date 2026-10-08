@@ -200,3 +200,21 @@ test('MCP guards found by the documentation audit', async () => {
   } finally { process.env.HOME = previousHome }
   await client.close()
 })
+
+test('test_workflow runs the saved scenarios or inline YAML', async () => {
+  const client = await connected()
+  await call(client, 'create_project', { project_id: 'scenarios', name: 'Scenarios' })
+  await call(client, 'upsert_node', { project_id: 'scenarios', node_id: 'check', skill_markdown: '# Check\n', evaluation: { type: 'predicate', question: 'OK?' } })
+  await call(client, 'upsert_node', { project_id: 'scenarios', node_id: 'ok', terminal: true })
+  await call(client, 'upsert_node', { project_id: 'scenarios', node_id: 'ko', terminal: true })
+  await call(client, 'set_transitions', { project_id: 'scenarios', node_id: 'check', transitions: [{ goto: 'ok', when: 'output.result == true' }, { goto: 'ko', when: 'output.result == false' }] })
+  await call(client, 'write_file', { project_id: 'scenarios', path: 'scenarios.yaml', content: 'scenarios:\n  - name: passes\n    results: {check: [true]}\n    expect: {final: ok}\n' })
+  const saved = await call(client, 'test_workflow', { project_id: 'scenarios' })
+  assert.deepEqual([saved.total, saved.passed], [1, 1])
+  const inline = await call(client, 'test_workflow', { project_id: 'scenarios', scenarios: 'scenarios:\n  - name: fails\n    results: {check: [false]}\n    expect: {final: ok}\n' })
+  assert.equal(inline.failed, 1)
+  assert.deepEqual(inline.results[0].mismatches, ['expected to end in ok, ended in ko'])
+  const viaApi = await server.call('POST', '/api/projects/scenarios/test', {})
+  assert.equal(viaApi.data.passed, 1)
+  await client.close()
+})
