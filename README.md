@@ -12,25 +12,15 @@ Long, multi-step instructions are fragile: agents skip steps, merge them, or car
 2. **Decide** with typed results. A step can answer a yes/no question, pick one option, or give a score, and arcs route on that result.
 3. **Export** a plugin. The agent follows an orchestrator Skill, executes one step at a time, and submits each result to a runner that validates it, retries with feedback when it is invalid, and picks the next step.
 
-The workflow in the screenshot, as exported to Mermaid:
+The workflow in the screenshot:
 
 ```mermaid
-stateDiagram-v2
-  direction LR
-  state "Plan" as plan
-  state "Draft" as draft
-  state "Review" as review
-  state "Published" as publish
-  state "Archived" as archive
-  [*] --> plan
-  plan --> draft
-  draft --> review
-  review --> publish : approved
-  review --> draft : Revise
-  review --> archive : rejected
-  note right of review : Is the draft ready to publish?
-  publish --> [*]
-  archive --> [*]
+flowchart LR
+  plan[Plan] --> draft[Draft]
+  draft --> review{"Review<br/>Ready to publish?"}
+  review -- approved --> publish([Published])
+  review -- changes --> draft
+  review -- rejected --> archive([Archived])
 ```
 
 ## Features
