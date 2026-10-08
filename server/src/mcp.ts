@@ -1,0 +1,106 @@
+import { spawn } from 'node:child_process'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+import { exportPlugin } from './exporter.ts'
+import * as projects from './projects.ts'
+import { badRequest } from './store.ts'
+import { VERSION } from './version.ts'
+
+export const INSTRUCTIONS = `Visage designs workflows where each node is an agent Skill and transitions form a state machine, then exports them as plugins for Claude Code and Codex.
+
+Workflow model (workflow.yaml in the project folder):
+- Root: workflow {id, name, version, description}, start (node ID), max_steps, nodes.
+- Node: type: skill, label, description, skill.path (skills/<node>/SKILL.md), terminal (true for final states, which run nothing),
+  next: ordered list of {goto, when?, label?}; the first transition whose \`when\` matches is taken.
+- Evaluation gate per node: output_schema (JSON Schema subset), checks (list of {when, message}),
+  max_attempts (the step is retried with feedback when evaluation fails), on_fail (node to route to after the last failed attempt).
+- Expressions: \`<path> <op> <literal>\` where path starts with output. or state. and op is ==, !=, <, <=, >, >=, in, not in.
+  state has input, outputs.<node>, feedback.<node>, attempts.<node>; \`.length\` gives a list/string length.
+
+Typical flow: create_project → upsert_node (with skill_markdown) for each step → set_transitions → upsert_node(terminal=true)
+→ validate_project → export_plugin. Use open_editor to give the user the visual editor URL.`
+
+type Context = { editorUrl: () => Promise<string | null> }
+
+const reply = (value: unknown) => ({ content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] })
+
+/** Wrap a handler so thrown errors become MCP tool errors with a readable message. */
+function handler<A>(run: (args: A) => unknown | Promise<unknown>) {
+  return async (args: A) => {
+    try {
+      return reply(await run(args))
+    } catch (error) {
+      return { ...reply((error as Error).message), isError: true }
+    }
+  }
+}
+
+export function openBrowser(url: string): void {
+  const [command, args] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]]
+  spawn(command, args as string[], { stdio: 'ignore', detached: true }).unref()
+}
+
+const check = z.object({ when: z.string().describe('Expression, e.g. output.score >= 0.8'), message: z.string().optional() })
+const transition = z.object({ goto: z.string(), when: z.string().optional(), label: z.string().optional() })
+
+export function createMcpServer(context: Context): McpServer {
+  const server = new McpServer({ name: 'visage', version: VERSION }, { instructions: INSTRUCTIONS })
+  const tool = <S extends z.ZodRawShape>(name: string, description: string, inputSchema: S, run: (args: z.infer<z.ZodObject<S>>) => unknown) =>
+    server.registerTool(name, { description, inputSchema }, handler(run) as never)
+
+  tool('list_projects', 'List Visage projects with their folders.', {}, () => projects.listProjects())
+  tool('create_project', 'Create a project with an empty workflow. project_id: letters, digits, - and _. parent_path: optional existing folder (default ~/.visage/projects).',
+    { project_id: z.string(), name: z.string(), parent_path: z.string().optional() },
+    ({ project_id, name, parent_path }) => projects.createProject({ id: project_id, name, parent_path }))
+  tool('delete_project', 'Permanently delete a project folder and its Skills. Requires confirm=true.',
+    { project_id: z.string(), confirm: z.boolean().default(false) },
+    ({ project_id, confirm }) => {
+      if (!confirm) throw badRequest('Pass confirm=true to delete the project and all its files')
+      return projects.deleteProject(project_id)
+    })
+
+  tool('get_workflow', 'Return the workflow YAML source, the parsed workflow and validation warnings.', { project_id: z.string() }, ({ project_id }) => projects.getWorkflow(project_id))
+  tool('put_workflow', 'Replace the whole workflow with YAML source. Structural errors are rejected; readiness issues come back as warnings.',
+    { project_id: z.string(), source: z.string() }, ({ project_id, source }) => projects.putWorkflow(project_id, source))
+  tool('configure_workflow', 'Change workflow-level settings: display name, description (used as the exported Skill description), version and max_steps.',
+    { project_id: z.string(), name: z.string().optional(), description: z.string().optional(), version: z.string().optional(), max_steps: z.number().int().optional() },
+    ({ project_id, ...settings }) => projects.configureWorkflow(project_id, settings))
+  tool('upsert_node', `Create or update a Skill node. Only given fields change.
+skill_markdown writes the node's SKILL.md (default path skills/<node_id>/SKILL.md).
+output_schema/checks/max_attempts/on_fail define the evaluation gate; pass {} / [] / "" to clear. The first node created becomes the start node.`,
+    {
+      project_id: z.string(), node_id: z.string(), label: z.string().optional(), description: z.string().optional(),
+      skill_markdown: z.string().optional(), skill_path: z.string().optional(), terminal: z.boolean().optional(),
+      output_schema: z.record(z.string(), z.any()).optional(), checks: z.array(check).optional(),
+      max_attempts: z.number().int().min(1).max(20).optional(), on_fail: z.string().optional(),
+      position: z.object({ x: z.number(), y: z.number() }).optional(),
+    },
+    ({ project_id, node_id, ...input }) => projects.upsertNode(project_id, node_id, input))
+  tool('remove_node', 'Remove a node and every transition or on_fail route pointing to it. The Skill file is kept.',
+    { project_id: z.string(), node_id: z.string() }, ({ project_id, node_id }) => projects.removeNode(project_id, node_id))
+  tool('set_transitions', 'Replace the outgoing transitions of a node. Order matters: the first matching `when` wins; omit `when` for the default.',
+    { project_id: z.string(), node_id: z.string(), transitions: z.array(transition) },
+    ({ project_id, node_id, transitions }) => projects.setTransitions(project_id, node_id, transitions))
+  tool('set_start', 'Make a node the initial state.', { project_id: z.string(), node_id: z.string() }, ({ project_id, node_id }) => projects.setStart(project_id, node_id))
+  tool('validate_project', 'Check whether the workflow is ready to export; returns errors and warnings.', { project_id: z.string() }, ({ project_id }) => projects.validateProject(project_id))
+
+  tool('list_files', 'List files in the project folder.', { project_id: z.string() }, ({ project_id }) => projects.listFiles(project_id))
+  tool('read_file', 'Read a text file from the project (Skills, references, workflow.yaml).',
+    { project_id: z.string(), path: z.string() }, ({ project_id, path }) => projects.readFile(project_id, path))
+  tool('write_file', 'Write a project file, e.g. a Skill or a reference. encoding: utf-8 or base64.',
+    { project_id: z.string(), path: z.string(), content: z.string(), encoding: z.enum(['utf-8', 'base64']).default('utf-8') },
+    ({ project_id, path, content, encoding }) => projects.writeFile(project_id, path, content, encoding))
+
+  tool('export_plugin', 'Export the workflow as a plugin for Claude Code and Codex (folder + zip). Default location: <project>/dist.',
+    { project_id: z.string(), output_dir: z.string().optional() }, ({ project_id, output_dir }) => exportPlugin(project_id, output_dir))
+  tool('open_editor', 'Return the URL of the Visage visual editor (optionally for one project) and open it in the browser when open=true.',
+    { project_id: z.string().optional(), open: z.boolean().default(false) },
+    async ({ project_id, open }) => {
+      const base = await context.editorUrl()
+      if (!base) throw new Error('The visual editor is not available in this process')
+      const url = project_id ? `${base}/?project=${encodeURIComponent(project_id)}` : base
+      if (open) openBrowser(url)
+      return { url, opened: open }
+    })
+  return server
+}

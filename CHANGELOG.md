@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the Python backend with a single Node.js server (`server/`) that serves the editor, the REST API and MCP (stdio and Streamable HTTP), bundled into one `visage.js` file.
+- Distributed Visage itself as a Claude Code / Codex plugin with a `visage` Skill and MCP server (`npm run package`).
+- Moved the project catalog from SQLite to `~/.visage/projects.json`.
+- Exported workflow plugins now use a Node.js runner (`scripts/flow.mjs`) instead of Python.
+- Removed harness selection and workflow execution from the editor; workflows are designed and exported, then run in Codex or Claude Code.
+
+### Added
+
+- Per-node evaluation gates: output schema, checks, retries with feedback and failure routes.
+- Plugin export with an orchestrator Skill and a runner that enforces the state machine.
+- MCP tools to create, edit, validate and export workflows, and to open the editor.
+
 ### Added
 
 - Created the local visual workflow editor and Python runtime.

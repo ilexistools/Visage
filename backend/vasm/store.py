@@ -12,6 +12,7 @@ import yaml
 
 DATA_DIR = Path(os.environ.get("VASM_DATA_DIR", Path(__file__).resolve().parents[2] / "data")).resolve()
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$")
+PROJECT_DIRS: dict[tuple[str, str], Path] = {}
 
 
 def now() -> str:
@@ -25,11 +26,37 @@ def checked_id(value: str) -> str:
 
 
 def project_dir(project_id: str) -> Path:
-    return DATA_DIR / "projects" / checked_id(project_id)
+    checked = checked_id(project_id)
+    key = (str(DATA_DIR.resolve()), checked)
+    if key not in PROJECT_DIRS:
+        # Another process (API server or MCP server) may have created the project.
+        from . import database
+        root = database.project_root(checked)
+        if root:
+            PROJECT_DIRS[key] = Path(root).resolve()
+    return PROJECT_DIRS.get(key, DATA_DIR / "projects" / checked)
 
 
-def run_dir(run_id: str) -> Path:
-    return DATA_DIR / "runs" / checked_id(run_id)
+def register_project_dir(project_id: str, path: str | Path) -> None:
+    checked = checked_id(project_id)
+    PROJECT_DIRS[(str(DATA_DIR.resolve()), checked)] = Path(path).resolve()
+
+
+def unregister_project_dir(project_id: str) -> None:
+    PROJECT_DIRS.pop((str(DATA_DIR.resolve()), checked_id(project_id)), None)
+
+
+def run_dir(run_id: str, project_id: str | None = None) -> Path:
+    checked = checked_id(run_id)
+    legacy = DATA_DIR / "runs" / checked
+    if legacy.exists():
+        return legacy
+    if project_id is None:
+        from . import database
+        project_id = database.project_id_for_run(checked)
+    if project_id:
+        return project_dir(project_id) / "runs" / checked
+    return legacy
 
 
 def read_json(path: Path, default: Any = None) -> Any:

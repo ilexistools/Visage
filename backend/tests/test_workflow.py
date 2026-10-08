@@ -1,6 +1,8 @@
 import base64
 import sys
 import time
+from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 import yaml
@@ -50,10 +52,53 @@ def test_new_project_starts_with_an_empty_canvas_and_cannot_run(client):
     response = client.get("/api/projects/blank/workflow").json()
     assert response["workflow"]["nodes"] == {}
     assert response["workflow"]["start"] == ""
+    assert response["workflow"]["harness"] == "codex"
+    assert response["workflow"]["model"] == "gpt-6-luna"
+    assert response["workflow"]["reasoning_effort"] == "medium"
     assert client.get("/api/projects/blank/files").json() == ["workflow.yaml"]
     rejected = client.post("/api/projects/blank/runs")
     assert rejected.status_code == 400
     assert "starting node" in rejected.json()["detail"]
+
+
+def test_project_files_and_runs_live_in_the_chosen_project_folder(client, tmp_path):
+    parent = tmp_path / "workspace"
+    parent.mkdir()
+    response = client.post("/api/projects", json={"id": "folder-project", "name": "Folder project", "parent_path": str(parent)})
+    assert response.status_code == 200, response.text
+    project_root = parent / "folder-project"
+    assert store.project_dir("folder-project") == project_root
+    assert (project_root / "workflow.yaml").is_file()
+    install_test_workflow(client, "folder-project")
+    run = client.post("/api/projects/folder-project/runs").json()
+    assert (project_root / "runs" / run["run_id"] / "state.json").is_file()
+    deleted = client.delete("/api/projects/folder-project")
+    assert deleted.status_code == 200
+    assert not project_root.exists()
+
+
+def test_codex_harness_receives_selected_model(client, tmp_path, monkeypatch):
+    client.post("/api/projects", json={"id": "codex-model", "name": "Codex model"})
+    root = store.project_dir("codex-model")
+    skill_path = root / "skills/step/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Step\n", encoding="utf-8")
+    run_id = "run-model-test"
+    store.run_dir(run_id, "codex-model").mkdir(parents=True)
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        output_file = Path(command[command.index("--output-last-message") + 1])
+        output_file.write_text('{"ok": true}', encoding="utf-8")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+    state = {"project_id": "codex-model", "data": {}, "last_output": None, "attempts": {"step": 1}}
+    result = runtime._run_harness(run_id, state, "step", {"skill": {"path": "skills/step/SKILL.md"}}, "codex", "gpt-6-astra")
+    assert commands[0][commands[0].index("--model") + 1] == "gpt-6-astra"
+    assert commands[0][commands[0].index("-c") + 1] == 'model_reasoning_effort="medium"'
+    assert result == {"ok": True}
 
 
 def test_project_can_be_renamed_and_deleted(client):
@@ -107,6 +152,27 @@ def test_skill_markdown_and_binary_resources_can_be_saved(client):
     assert traversal.status_code == 400
 
 
+def test_missing_referenced_skill_markdown_is_created_when_opened(client):
+    client.post("/api/projects", json={"id": "missing-skill", "name": "Missing skill"})
+    root = store.project_dir("missing-skill")
+    source = {
+        "version": 1,
+        "workflow": {"id": "missing-skill", "name": "Missing skill", "version": "0.1.0"},
+        "harness": "codex", "start": "step", "nodes": {
+            "step": {"type": "skill", "label": "Generated step", "skill": {"path": "skills/generated/SKILL.md"}, "next": [{"goto": "done"}]},
+            "done": {"type": "skill", "label": "Done", "terminal": True},
+        },
+    }
+    skill_path = root / "skills/generated/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Generated step\n")
+    saved = client.put("/api/projects/missing-skill/workflow", json={"source": yaml.safe_dump(source, sort_keys=False)})
+    assert saved.status_code == 200, saved.text
+    skill_path.unlink()
+    opened = client.get("/api/projects/missing-skill/files/skills/generated/SKILL.md")
+    assert opened.status_code == 200
+    assert "Add instructions for this step" in opened.text
+    assert (root / "skills/generated/SKILL.md").is_file()
 def test_step_and_recovery_preserve_progress(client):
     client.post("/api/projects", json={"id": "steps", "name": "Steps"})
     install_test_workflow(client, "steps")

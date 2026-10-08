@@ -1,0 +1,28 @@
+{
+  "name": "visage-server",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "node build.mjs",
+    "package": "node build.mjs --plugin",
+    "start": "node build/visage.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.mjs --skip-ui && tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "fflate": "^0.8.3",
+    "js-yaml": "^4.1.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.19.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.0"
+  }
+}

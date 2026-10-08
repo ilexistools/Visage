@@ -1,68 +1,108 @@
 # Visage
 
-Visage is a local visual editor and runtime for workflows that route AI Skills through explicit state transitions.
+Visage is a visual editor for workflows that route agent Skills through explicit state transitions. Each node is a Skill, each output is evaluated before the workflow advances, and a finished workflow is exported as a plugin that Codex or Claude Code runs on its own.
 
-The current version is **0.1.0**. It runs in a local browser with a Python backend. Projects start with an empty canvas; add Skill nodes and configure a workflow before running it.
+The current version is **0.2.0**. Everything runs in one Node.js process that serves the editor, a REST API and an MCP server, and the whole app is itself distributed as a Claude Code / Codex plugin.
 
 ## Quick start
 
-Requires Node.js 20+ and Python 3.11+. Install [uv](https://docs.astral.sh/uv/) if it is not already available.
+Requires Node.js 20+.
+
+### As a plugin (recommended)
 
 ```bash
-cd backend
-uv sync --extra dev
-uv run uvicorn vasm.api:app --host 127.0.0.1 --port 8000
-```
-
-In a second terminal:
-
-```bash
-cd frontend
+cd server
 npm install
-npm run dev
+npm run package          # builds dist/visage/ and dist/visage-<version>.zip
+claude --plugin-dir dist/visage
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Click **New project** to open a blank canvas. Add Skill nodes, configure transitions and a final state, then save and run the workflow.
+The plugin registers the `visage` MCP server and a `visage` Skill. Ask the agent to create a workflow or to "open the Visage editor": the server also serves the editor at [http://127.0.0.1:4317](http://127.0.0.1:4317). In Codex, add `server/dist/visage` as a local plugin; it uses `.codex-plugin/plugin.json` and `.codex-mcp.json`.
 
-## What is implemented
+### Standalone editor
 
-- Visual workflow canvas with one Skill node type; initial and final states are markers on Skill nodes. Arc labels are illustrative and separate from transition conditions.
-- Inspector for node label, description, arc text and state, with a Markdown Skill editor and resource file imports.
-- Compact editor layout with resizable, collapsible sidebars that can dock on either side of the canvas, plus icon-only node actions in the topbar.
-- Workflow validation for Skill paths, node targets and restricted transition expressions.
-- Codex CLI, Claude Code and generic CLI adapters, selected once for the whole workflow.
-- Persisted run state, append-only events, checkpoints and artifact metadata.
-- Automatic and single-step execution, pause after the current node and resume.
-- Run timeline, state view, artifact preview and node inspector.
-- Recovery of runs interrupted while the backend was stopped; the current node is ready to retry.
+```bash
+cd server && npm install && npm run build
+node build/visage.js --open
+```
 
-Workflow definitions live in `data/projects/<project-id>/workflow.yaml`. New projects contain only an empty workflow; add Skill Markdown and supporting files through the editor. SQLite catalogs projects and runs in `data/vasm.sqlite`. Detailed run records live in `data/runs/<run-id>/` as JSON and JSONL. `data/` is ignored by Git.
+### Development
 
-### Harness configuration
+```bash
+cd server && npm install && npm run dev       # API + MCP on :4317, reloads on change
+cd frontend && npm install && npm run dev     # editor with hot reload on :5173, proxied to :4317
+```
 
-A workflow selects one global `harness` (`generic_cli`, `codex` or `claude`) for all non-final Skill nodes. Each non-final Skill needs a `skill.path`; with `generic_cli`, it also needs a command array. Final state nodes share the same Skill node type and end execution without invoking a harness. The process runs in the project directory and receives the Skill text on standard input. It also receives `VASM_CONTEXT_JSON`, `VASM_RUN_ID`, `VASM_NODE_ID` and `VASM_ARTIFACT_DIR` environment variables. JSON written to standard output becomes the node output; other text is wrapped as `{ "text": "..." }`. Files written to the artifact directory are indexed after the node completes.
+## How it works
+
+- **Projects** are folders containing `project.json`, `workflow.yaml`, one `skills/<node>/SKILL.md` per step and any imported references. The catalog of project locations is `~/.visage/projects.json` (override with `VISAGE_DATA_DIR`); projects created without a location go to `~/.visage/projects/`.
+- **Editor**: canvas with one Skill node type; initial and final states are markers on nodes. The Inspector edits label, description, arc labels and conditions, the evaluation gate, the Skill Markdown and resource imports.
+- **MCP**: the same process speaks MCP over stdio (`--stdio`, used by the plugin) and over Streamable HTTP at `http://127.0.0.1:4317/mcp`. When several harness sessions start the server, the first one serves the editor and the others reuse it.
+- **Export**: the **Export plugin** button, `POST /api/projects/{id}/export` or the `export_plugin` tool produce a plugin that does not need Visage.
+
+### Workflow format
 
 ```yaml
-my_task:
-  type: skill
-  skill: {path: skills/my-task/SKILL.md}
-  next:
-    - goto: review
+version: 1
+workflow: {id: review-flow, name: Review flow, version: 0.1.0, description: Used as the exported Skill description}
+start: draft
+max_steps: 50               # stops runaway loops
+nodes:
+  draft:
+    type: skill
+    skill: {path: skills/draft/SKILL.md}
+    output_schema:          # JSON Schema subset: type, required, properties, enum, const, items, min/max, pattern
+      type: object
+      required: [text]
+    next:
+      - goto: review
+  review:
+    type: skill
+    skill: {path: skills/review/SKILL.md}
+    checks:
+      - when: output.score >= 0.8
+        message: Score must be at least 0.8
+    max_attempts: 3         # the step is retried with the failure feedback
+    on_fail: draft          # after the last failed attempt; omit to fail the run
+    next:
+      - goto: done
+        when: output.verdict == "approved"
+      - goto: draft         # no `when`: default transition
+  done:
+    type: skill
+    terminal: true
 ```
 
-Set `harness: codex` (or `claude`, `generic_cli`) at the workflow root to choose the runner for all Skills.
+Expressions are `<path> <operator> <literal>`. Paths start with `output.` (the step output) or `state.` (`input`, `outputs.<node>`, `feedback.<node>`, `attempts.<node>`) and may end in `.length`. Operators are `==`, `!=`, `<`, `<=`, `>`, `>=`, `in` and `not in`. Expressions never execute code. Missing start or final nodes and missing Skill files are saved as warnings and only block export.
 
-`codex` uses `codex exec`; `claude` uses `claude --print`. Install and authenticate those CLIs separately before using them. These adapters invoke local processes with the host user's permissions. The backend binds to `127.0.0.1` in the quick start because project commands can access local files.
+### MCP tools
 
-Transition conditions support paths under `output` and `state`, with `==`, `!=`, `<`, `<=`, `>` or `>=` against literals. They do not execute arbitrary code.
+`list_projects`, `create_project`, `delete_project`, `get_workflow`, `put_workflow`, `configure_workflow`, `upsert_node`, `remove_node`, `set_transitions`, `set_start`, `validate_project`, `list_files`, `read_file`, `write_file`, `export_plugin` and `open_editor`.
+
+To connect a harness without installing the plugin:
+
+```bash
+claude mcp add visage -- node /path/to/server/build/visage.js --stdio
+codex mcp add visage -- node /path/to/server/build/visage.js --stdio
+```
+
+### Exported workflow plugins
+
+An export writes `<project>/dist/<plugin>/` and a zip, with `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`:
+
+- `skills/<plugin>/SKILL.md` is the only discoverable Skill. It tells the agent to drive the run with `scripts/flow.mjs`.
+- `scripts/flow.mjs` (Node.js only, no dependencies) owns the state machine: `start`, `next`, `submit`, `status`. It evaluates each submitted output with the same engine as the editor and returns the next step, a retry with feedback, or the final result. Run state is kept in `.visage/runs/<plugin>/` under the working directory.
+- Node Skills are copied with their resources to `nodes/<node>/STEP.md`, so the harness cannot run them out of order.
+
+Try one with `claude --plugin-dir <project>/dist/<plugin>`.
 
 ## API and development
 
-The API is documented interactively at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Main routes include `/api/projects`, `/api/projects/{id}/workflow`, `/api/projects/{id}/runs`, `/api/runs/{id}`, `/api/runs/{id}/start`, `/api/runs/{id}/step`, `/api/runs/{id}/pause` and `/api/runs/{id}/resume`.
+Routes: `/api/health`, `/api/projects`, `/api/projects/{id}` (rename, delete), `/api/projects/{id}/workflow`, `/api/projects/{id}/validate`, `/api/projects/{id}/files[/path]`, `/api/projects/{id}/export`, `/api/projects/{id}/export.zip` and `/api/folder-picker`. The server binds to `127.0.0.1` and rejects requests whose `Host` or `Origin` is not local, because the API writes project files.
 
 ```bash
-cd backend && uv run pytest -q
+cd server && npm test && npm run typecheck
 cd frontend && npm run build
 ```
 
-The workflow editor supports local execution through the selected harness. Artifact editing, real-time push events, multi-user access, scheduled jobs and cloud execution are not included in this version.
+Source layout: `server/src/engine.ts` (expressions, schema checks, transitions; shared with the exported runner), `workflow.ts` (validation), `store.ts` and `projects.ts` (catalog and files), `exporter.ts`, `mcp.ts`, `http.ts`, `main.ts`, and `runner/flow.ts` (bundled to `flow.mjs`). `build.mjs` bundles the server into a single `visage.js` with esbuild.

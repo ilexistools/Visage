@@ -6,3 +6,6 @@ backend/.venv/
 .pytest_cache/
 data/
 .DS_Store
+server/node_modules/
+server/build/
+server/dist/
