@@ -160,21 +160,17 @@ Writes `<output_dir>/<plugin>/` and `<output_dir>/<plugin>-<version>.zip`, repla
 See [exported-plugins.md](exported-plugins.md) for what the plugin contains and how to install it.
 
 ### `export_diagram`
-`project_id`. Returns a Mermaid state diagram as text:
+`project_id`. Returns a Mermaid flowchart as text, which GitHub, GitLab and most Markdown viewers render:
 ```
-stateDiagram-v2
-  direction LR
-  state "Draft" as draft
-  state "Review" as review
-  state "Published" as done
-  [*] --> draft
-  draft --> review
-  review --> done : approved
-  review --> draft : changes
-  note right of review : Ready?
-  done --> [*]
+flowchart LR
+  n_draft["Draft"]
+  n_review{"Review<br/>Ready?"}
+  n_done(["Published"])
+  n_draft --> n_review
+  n_review -->|"approved"| n_done
+  n_review -->|"changes"| n_draft
 ```
-Arcs show their label or the result they route on (`yes`, `no`, an option, `≥ 0.8`, `otherwise`); `on_fail` routes show `invalid result`. Paste it in a fenced `mermaid` block.
+Steps are boxes, evaluated steps are diamonds with their question (shortened when long), final states are rounded. Arcs show their label or the result they route on (`yes`, `no`, an option, `≥ 0.8`, `otherwise`); `on_fail` routes are dashed and labelled `invalid result`. Paste it in a fenced `mermaid` block.
 
 ### `open_editor`
 | Argument | Type | Notes |

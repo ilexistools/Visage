@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Step evaluation standardised on three result types, predicate (true/false), choice (one option) and score (0 to 1), with retries with feedback, failure routes, arcs routed on the result and warnings for results without an arc. Replaces the free-form output schema and checks.
 - Plugin export with an orchestrator Skill and a runner that enforces the state machine.
-- Export menu with PNG images of the canvas and Mermaid state diagrams; plugin READMEs include the diagram.
+- Export menu with PNG images of the canvas and Mermaid flowcharts (which GitHub renders); plugin READMEs include the diagram.
 - Harness documentation in `docs/harness` (installation, the `visage` Skill, MCP tool reference, workflow format, authoring guide, exported plugin protocol), shipped inside the Visage plugin and checked by tests.
 - Imported Skill files are listed in the Inspector and can be deleted; the Explorer can be hidden (button or Cmd/Ctrl+B).
 - MCP tools to create, edit, validate and export workflows, and to open the editor.

@@ -105,7 +105,7 @@ apply when the result is invalid; on_fail: "" clears it. The first node created 
     { project_id: z.string(), path: z.string() }, ({ project_id, path }) => projects.deleteFile(project_id, path))
   tool('export_plugin', 'Export the workflow as a plugin for Claude Code and Codex (folder + zip). Default location: <project>/dist.',
     { project_id: z.string(), output_dir: z.string().optional() }, ({ project_id, output_dir }) => exportPlugin(project_id, output_dir))
-  tool('export_diagram', 'Return the workflow as a Mermaid state diagram (text), for READMEs, pull requests and docs.',
+  tool('export_diagram', 'Return the workflow as a Mermaid flowchart (text) for READMEs, pull requests and docs; it renders on GitHub.',
     { project_id: z.string() }, ({ project_id }) => workflowToMermaid(projects.getWorkflow(project_id).workflow))
   tool('open_editor', 'Return the URL of the Visage visual editor (optionally for one project) and open it in the browser when open=true.',
     { project_id: z.string().optional(), open: z.boolean().default(false) },

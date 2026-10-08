@@ -2,41 +2,39 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { workflowToMermaid } from '../src/mermaid.ts'
 
-test('workflows become Mermaid state diagrams with safe IDs and escaped text', () => {
+test('workflows become Mermaid flowcharts with safe IDs and escaped text', () => {
   const diagram = workflowToMermaid({
     start: 'review-draft',
     nodes: {
       'review-draft': {
-        type: 'skill', label: 'Review "final"; v2: ok', on_fail: '1st',
-        evaluation: { type: 'choice', question: 'Ready: yes?', options: ['approved', 'changes'] },
-        next: [{ goto: 'done', when: 'output.result == "approved"' }, { goto: '1st', when: 'output.result == "changes"' }, { goto: 'done', label: 'Escalate' }],
+        type: 'skill', label: 'Review "final" | <v2>', on_fail: 'end',
+        evaluation: { type: 'choice', question: 'Ready for the editor, with every section of the brief covered?', options: ['approved', 'changes'] },
+        next: [{ goto: 'end', when: 'output.result == "approved"' }, { goto: '1st', when: 'output.result == "changes"' }, { goto: 'end', label: 'Escalate' }],
       },
-      '1st': { type: 'skill', evaluation: { type: 'score' }, next: [{ goto: 'done', when: 'output.result >= 0.8' }, { goto: 'review-draft' }] },
-      done: { type: 'skill', label: 'Done', terminal: true },
+      '1st': { type: 'skill', evaluation: { type: 'score' }, next: [{ goto: 'end', when: 'output.result >= 0.8' }, { goto: 'review-draft' }] },
+      end: { type: 'skill', label: 'Done', terminal: true },
     },
   })
   assert.equal(diagram, [
-    'stateDiagram-v2',
-    '  direction LR',
-    '  state "Review #quot;final#quot;#59; v2#58; ok" as review_draft',
-    '  state "1st" as s_1st',
-    '  state "Done" as done',
-    '  [*] --> review_draft',
-    '  review_draft --> done : approved',
-    '  review_draft --> s_1st : changes',
-    '  review_draft --> done : Escalate',
-    '  review_draft --> s_1st : invalid result',
-    '  note right of review_draft : Ready#58; yes?',
-    '  s_1st --> done : ≥ 0.8',
-    '  s_1st --> review_draft : otherwise',
-    '  done --> [*]',
+    'flowchart LR',
+    '  n_review_draft{"Review #quot;final#quot; #124; #lt;v2#gt;<br/>Ready for the editor, with every section of the…"}',
+    '  n_1st{"1st"}',
+    '  n_end(["Done"])',
+    '  n_review_draft -->|"approved"| n_end',
+    '  n_review_draft -->|"changes"| n_1st',
+    '  n_review_draft -->|"Escalate"| n_end',
+    '  n_review_draft -.->|"invalid result"| n_end',
+    '  n_1st -->|"≥ 0.8"| n_end',
+    '  n_1st -->|"otherwise"| n_review_draft',
     '',
   ].join('\n'))
 })
 
-test('IDs that collide after cleaning stay distinct', () => {
-  const diagram = workflowToMermaid({ start: 'a-b', nodes: { 'a-b': { type: 'skill', next: [{ goto: 'a_b' }] }, a_b: { type: 'skill', terminal: true } } })
-  assert.match(diagram, /state "a-b" as a_b\n/)
-  assert.match(diagram, /state "a_b" as a_b_\n/)
-  assert.match(diagram, /a_b --> a_b_\n/)
+test('IDs that collide after cleaning stay distinct, and keywords such as end are safe', () => {
+  const diagram = workflowToMermaid({ start: 'a-b', nodes: { 'a-b': { type: 'skill', next: [{ goto: 'a_b' }] }, a_b: { type: 'skill', next: [{ goto: 'end' }] }, end: { type: 'skill', terminal: true } } })
+  assert.match(diagram, /n_a_b\["a-b"\]\n/)
+  assert.match(diagram, /n_a_b_\["a_b"\]\n/)
+  assert.match(diagram, /n_a_b --> n_a_b_\n/)
+  assert.match(diagram, /n_a_b_ --> n_end\n/)
+  assert.doesNotMatch(diagram, /^\s+end\b/m)
 })
