@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-08
+
+### Added
+
+- Validation warns about unknown node keys, such as a misspelled field or text cut at a comma inside a YAML `{...}` mapping.
+
+### Fixed
+
+- The README quick start installs the frontend dependencies, without which `npm run package` failed.
+- Exported Skills tell the agent to pass `--run <name>` when the user names the run.
+
 ## [0.3.0] - 2026-10-08
 
 First tagged release. Version 0.2.0 was only used internally during the move from Python to Node.js and was never released.
@@ -50,5 +61,6 @@ Initial Python version.
 - Added illustrative text labels to workflow arcs, separate from transition decision conditions.
 - Added an inline Markdown Skill editor and imports for binary or text resources into each Skill folder.
 
-[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ilexistools/Visage/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ilexistools/Visage/releases/tag/v0.3.0
