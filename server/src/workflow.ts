@@ -19,6 +19,9 @@ export const dumpWorkflow = (workflow: Workflow) => yaml.dump(workflow, { noRefs
 
 const fail = (message: string): never => { throw badRequest(message) }
 
+// output_schema and checks have their own warning.
+const NODE_KEYS = new Set(['type', 'label', 'description', 'skill', 'terminal', 'evaluation', 'max_attempts', 'on_fail', 'next', 'position', 'output_schema', 'checks'])
+
 /**
  * Validate a workflow document.
  *
@@ -68,6 +71,8 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
       }
     }
     if (!node.terminal && !node.next?.length) warnings.push(`Node ${id} has no transitions`)
+    const unknown = Object.keys(node).filter(key => !NODE_KEYS.has(key))
+    if (unknown.length) warnings.push(`Node ${id}: unknown keys ${unknown.join(', ')}`)
     for (const legacy of ['output_schema', 'checks'] as const) {
       if (node[legacy] !== undefined) warnings.push(`Node ${id}: ${legacy} is no longer used; choose a predicate, choice or score evaluation`)
     }

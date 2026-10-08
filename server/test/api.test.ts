@@ -92,11 +92,12 @@ test('incomplete workflows save with warnings; structural errors are rejected', 
   const warned = yaml.dump({ version: 1, start: 'a', nodes: {
     a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, output_schema: { type: 'object' }, evaluation: { type: 'predicate' }, next: [{ goto: 'b', when: 'output.result == true' }] },
     b: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, next: [{ goto: 'c' }, { goto: 'a' }] },
-    c: { type: 'skill', terminal: true },
+    c: { type: 'skill', terminal: true, lable: 'typo' },
   } })
   const warnings = (await server.call('PUT', '/api/projects/partial/workflow', { source: warned })).data.warnings
   assert.ok(warnings.includes('Node a: output_schema is no longer used; choose a predicate, choice or score evaluation'), warnings)
   assert.ok(warnings.includes('Node a: no arc for result false'), warnings)
+  assert.ok(warnings.includes('Node c: unknown keys lable'), warnings)
   assert.ok(warnings.includes('Node b: arcs after the unconditional arc to c are never used'), warnings)
   const unfinishedChoice = yaml.dump({ version: 1, start: 'a', nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, evaluation: { type: 'choice', options: [] }, next: [{ goto: 'c' }] }, c: { type: 'skill', terminal: true } } })
   const saved2 = await server.call('PUT', '/api/projects/partial/workflow', { source: unfinishedChoice })

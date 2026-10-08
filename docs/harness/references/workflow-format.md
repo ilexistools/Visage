@@ -161,4 +161,5 @@ Saving checks structure; exporting also requires the workflow to be complete.
 - `Node <id>: no arc for result <value>` (for scores: `no arc for result scores such as 0.65`): that result has nowhere to go and fails the run.
 - `Node <id>: arcs after the unconditional arc to <target> are never used`: move the otherwise arc to the end.
 - `Node <id> is unreachable`: nothing leads to it from the start.
+- `Node <id>: unknown keys <keys>`: a misspelled field, or text cut at a comma inside `{...}`; quote text that contains commas.
 - `Node <id>: output_schema is no longer used ...` / `checks is no longer used ...`: old format; set an evaluation instead.

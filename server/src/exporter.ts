@@ -103,7 +103,7 @@ All commands below use \`scripts/flow.mjs\`, located in the same folder as this 
 
 1. **Start** a run with the user's request as input:
    \`node <this-skill-folder>/scripts/flow.mjs start --input '<JSON or text with the user request>'\`
-   (use \`--input-file path.json\` for large inputs).
+   (use \`--input-file path.json\` for large inputs; if the user names the run, add \`--run <name>\` using letters, digits, \`-\` and \`_\`).
 2. The runner prints JSON with \`status: "awaiting_output"\` and the current step: \`node\`, \`step_file\`, \`resources_dir\`, \`input\`, \`previous_outputs\`, \`feedback\`, \`output_contract\`, \`artifact_dir\`, \`output_file\` and the exact \`submit\` command.
 3. **Execute the step**: read \`step_file\` and follow it exactly, using \`input\` and \`previous_outputs\` as context and files in \`resources_dir\` as references. Save any files you produce in \`artifact_dir\`.
 4. **Submit**: write one JSON object to \`output_file\` and run the \`submit\` command exactly as printed. When \`output_contract\` is present, the object must contain \`result\` answering its \`question\` (\`true\`/\`false\` for a predicate, exactly one of \`options\` for a choice, a number from 0 to 1 for a score) and a short \`reason\`. Files you produce go in \`artifact_dir\`; the runner uses only \`result\` to choose the next step.

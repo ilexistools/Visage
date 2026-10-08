@@ -39,7 +39,9 @@ Requires [Node.js](https://nodejs.org) 20 or later.
 
 ```bash
 git clone https://github.com/ilexistools/Visage.git
-cd Visage/server
+cd Visage
+(cd frontend && npm install)  # the package step builds the editor
+cd server
 npm install
 npm run package            # builds dist/visage (the plugin) and dist/visage-<version>.zip
 ```
