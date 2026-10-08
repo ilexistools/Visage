@@ -5,6 +5,7 @@ import { basename, extname, join, sep } from 'node:path'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { exportPlugin } from './exporter.ts'
 import { createMcpServer } from './mcp.ts'
+import { workflowToMermaid } from './mermaid.ts'
 import * as projects from './projects.ts'
 import { badRequest, dataDir, HttpError, inside, notFound } from './store.ts'
 import { VERSION } from './version.ts'
@@ -123,8 +124,11 @@ const routes: Route[] = [
     const result = exportPlugin(pid)
     return new Raw(readFileSync(result.zip!), 'application/zip', { 'Content-Disposition': `attachment; filename="${basename(result.zip!)}"` })
   }],
+  ['GET', new RegExp(`^/api/projects/${id}/diagram\\.mmd$`), (_, [pid]) =>
+    new Raw(workflowToMermaid(projects.getWorkflow(pid).workflow), 'text/vnd.mermaid; charset=utf-8', { 'Content-Disposition': `attachment; filename="${pid}.mmd"` })],
   ['GET', new RegExp(`^/api/projects/${id}/files$`), (_, [pid]) => projects.listFiles(pid)],
   ['GET', new RegExp(`^/api/projects/${id}/files/(.+)$`), (_, [pid, path]) => new Raw(projects.readFile(pid, path), 'text/plain; charset=utf-8')],
+  ['DELETE', new RegExp(`^/api/projects/${id}/files/(.+)$`), (_, [pid, path]) => projects.deleteFile(pid, path)],
   ['PUT', new RegExp(`^/api/projects/${id}/files/(.+)$`), async (_, [pid, path], body) => {
     const { content, encoding } = await body() ?? {}
     if (typeof content !== 'string') throw badRequest('content must be a string')

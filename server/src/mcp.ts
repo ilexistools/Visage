@@ -2,26 +2,29 @@ import { spawn } from 'node:child_process'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { exportPlugin } from './exporter.ts'
+import { workflowToMermaid } from './mermaid.ts'
 import * as projects from './projects.ts'
 import { badRequest } from './store.ts'
 import { VERSION } from './version.ts'
 
-export const INSTRUCTIONS = `Visage designs workflows where each node is an agent Skill and transitions form a state machine, then exports them as plugins for Claude Code and Codex.
+export const INSTRUCTIONS = `Visage designs state-machine workflows of agent Skills and exports them as plugins for Claude Code and Codex. It does not run workflows.
 
-Workflow model (workflow.yaml in the project folder):
-- Root: workflow {id, name, version, description}, start (node ID), max_steps, nodes.
-- Node: type: skill, label, description, skill.path (skills/<node>/SKILL.md), terminal (true for final states, which run nothing),
-  next: ordered list of {goto, when?, label?}; the first transition whose \`when\` matches is taken.
-- Evaluation per node (optional): every step returns JSON {"result": ..., "reason": "..."} and evaluation.type says what result is:
-  predicate (true/false), choice (exactly one of evaluation.options) or score (a number from 0 to 1). evaluation.question says what to decide.
-  Steps may also write files and other keys; only result drives the next step. An invalid result is retried with feedback up to
-  max_attempts, then routed to on_fail (or the run stops).
-- Arcs route on the result: predicate \`output.result == true\` / \`== false\`; choice \`output.result == "option"\`;
-  score \`output.result >= 0.8\` (also >, <, <=). Leave \`when\` empty on the last arc for "otherwise". Validation warns about results with no arc.
-- The \`when\` grammar is \`<path> <op> <literal>\` with ==, !=, <, <=, >, >=, in, not in; paths start with output. or state.
+A project is a folder with workflow.yaml and one skills/<step>/SKILL.md per step. Changes are saved at once and appear in the visual editor (open_editor).
 
-Typical flow: create_project → upsert_node (with skill_markdown) for each step → set_transitions → upsert_node(terminal=true)
-→ validate_project → export_plugin. Use open_editor to give the user the visual editor URL.`
+Procedure: list_projects (reuse an existing project) → create_project → configure_workflow (description = when to use the exported Skill)
+→ upsert_node for each step with label, description and skill_markdown (complete instructions; the first step created is the start)
+→ evaluation on steps whose result picks the next step → upsert_node terminal=true for each end state
+→ set_transitions for every step → validate_project (fix errors and warnings) → export_plugin. export_diagram returns a Mermaid diagram.
+
+Evaluation: the step returns {"result": ..., "reason": "..."}; evaluation.type is predicate (true/false), choice (one of options) or score (0 to 1),
+with a question saying what to decide. Steps that only produce files need none. An invalid result is tried again with feedback, up to max_attempts tries in total (default 1 = no retry), then goes to on_fail or fails the run.
+
+Arcs: set_transitions replaces all arcs of a step; the first arc whose when matches is taken; omit when on the last arc for "otherwise" (an empty when is rejected).
+Route with output.result == true / == false (predicate), output.result == "option" (choice), output.result >= 0.8 (score; also >, <, <=).
+when is <path> <op> <literal>: path starts with output. or state. (state.input, state.outputs.<step>.<key>, state.attempts.<step>);
+ops ==, !=, <, <=, >, >=, in, not in. A warning "no arc for result X" means that result would fail the run.
+
+write_file refuses workflow.yaml and project.json; use the workflow tools. delete_project needs confirm=true and is permanent.`
 
 type Context = { editorUrl: () => Promise<string | null> }
 
@@ -98,8 +101,12 @@ apply when the result is invalid; on_fail: "" clears it. The first node created 
     { project_id: z.string(), path: z.string(), content: z.string(), encoding: z.enum(['utf-8', 'base64']).default('utf-8') },
     ({ project_id, path, content, encoding }) => projects.writeFile(project_id, path, content, encoding))
 
+  tool('delete_file', 'Delete a project file, e.g. a reference imported for a Skill. workflow.yaml, project.json and Skills used by steps cannot be deleted.',
+    { project_id: z.string(), path: z.string() }, ({ project_id, path }) => projects.deleteFile(project_id, path))
   tool('export_plugin', 'Export the workflow as a plugin for Claude Code and Codex (folder + zip). Default location: <project>/dist.',
     { project_id: z.string(), output_dir: z.string().optional() }, ({ project_id, output_dir }) => exportPlugin(project_id, output_dir))
+  tool('export_diagram', 'Return the workflow as a Mermaid state diagram (text), for READMEs, pull requests and docs.',
+    { project_id: z.string() }, ({ project_id }) => workflowToMermaid(projects.getWorkflow(project_id).workflow))
   tool('open_editor', 'Return the URL of the Visage visual editor (optionally for one project) and open it in the browser when open=true.',
     { project_id: z.string().optional(), open: z.boolean().default(false) },
     async ({ project_id, open }) => {

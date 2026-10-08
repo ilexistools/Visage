@@ -39,31 +39,8 @@ function buildUi() {
   cpSync(join(frontend, 'dist'), join(out, 'ui'), { recursive: true })
 }
 
-const PLUGIN_SKILL = `---
-name: visage
-description: "Design, edit and export state-machine workflows of agent Skills with Visage: each node is a Skill, transitions decide the order, and each step output is evaluated before the next. Use when the user wants to create or change a Skill workflow, open the Visage visual editor, or export a workflow as a Claude Code / Codex plugin."
----
-# Visage
-
-Visage stores workflows as projects (a folder with \`workflow.yaml\` and one \`skills/<node>/SKILL.md\` per step). Use the \`visage\` MCP tools to work on them; the same changes appear live in the visual editor.
-
-## Building a workflow
-
-1. \`create_project\` (or \`list_projects\` to reuse one).
-2. For each step, \`upsert_node\` with a clear \`label\`, \`description\` and \`skill_markdown\` (the full instructions for that step). The first node becomes the start node.
-3. When the next step depends on this one, give it an \`evaluation\`: \`predicate\` (true/false, e.g. "Does it pass the tests?"), \`choice\` (one of \`options\`, e.g. approved / changes / rejected) or \`score\` (0 to 1). Write the \`question\` the step answers. Steps only produce files? Leave the evaluation out. Use \`max_attempts\` and \`on_fail\` for invalid results.
-4. \`upsert_node\` with \`terminal: true\` for each final state, then \`set_transitions\` for every step. Order matters: the first transition whose \`when\` matches wins; leave \`when\` empty for the default.
-5. \`validate_project\` and fix every error.
-6. \`export_plugin\` to produce the plugin folder and zip.
-
-## The visual editor
-
-Call \`open_editor\` (with \`project_id\` and \`open: true\` to launch the browser) and give the user the returned URL. Tell the user that edits made in the editor and through these tools affect the same files.
-
-## Routing on the result
-
-Every evaluated step returns \`{"result": ..., "reason": "..."}\`. Route with \`set_transitions\`: predicate \`output.result == true\` / \`output.result == false\`; choice \`output.result == "approved"\`; score \`output.result >= 0.8\` (also \`>\`, \`<\`, \`<=\`). Leave \`when\` empty on the last arc for "otherwise". \`validate_project\` warns about results that have no arc.
-`
+// The Skill, its references and the README come from docs/harness, the single source of the harness documentation.
+const harnessDocs = join(root, '..', 'docs', 'harness')
 
 function assemblePlugin() {
   const dist = join(root, 'dist')
@@ -74,9 +51,11 @@ function assemblePlugin() {
   cpSync(join(out, 'flow.mjs'), join(plugin, 'server', 'flow.mjs'))
   cpSync(join(out, 'ui'), join(plugin, 'server', 'ui'), { recursive: true })
   mkdirSync(join(plugin, 'skills', 'visage'), { recursive: true })
-  writeFileSync(join(plugin, 'skills', 'visage', 'SKILL.md'), PLUGIN_SKILL)
+  cpSync(join(harnessDocs, 'SKILL.md'), join(plugin, 'skills', 'visage', 'SKILL.md'))
+  cpSync(join(harnessDocs, 'references'), join(plugin, 'skills', 'visage', 'references'), { recursive: true })
+  cpSync(join(root, '..', 'LICENSE'), join(plugin, 'LICENSE'))
   const description = 'Visual editor and MCP server for state-machine workflows of agent Skills, exportable as Claude Code and Codex plugins.'
-  const manifest = { name: 'visage', version, description, author: { name: 'Visage' }, keywords: ['workflow', 'state-machine', 'skills', 'mcp'] }
+  const manifest = { name: 'visage', version, description, author: { name: 'Ilexis Tools' }, license: 'MIT', repository: 'https://github.com/ilexistools/Visage', keywords: ['workflow', 'state-machine', 'skills', 'mcp'] }
   const json = value => JSON.stringify(value, null, 2) + '\n'
   mkdirSync(join(plugin, '.claude-plugin'))
   writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), json(manifest))
@@ -86,12 +65,14 @@ function assemblePlugin() {
     ...manifest, skills: './skills/', mcpServers: './.codex-mcp.json',
     interface: {
       displayName: 'Visage', shortDescription: 'Design and export state-machine workflows of Skills', longDescription: description,
-      developerName: 'Visage', category: 'Productivity', capabilities: ['Interactive', 'Write'],
+      developerName: 'Ilexis Tools', category: 'Productivity', capabilities: ['Interactive', 'Write'],
       defaultPrompt: ['Open the Visage editor', 'Create a Visage workflow for this process'],
     },
   }))
   writeFileSync(join(plugin, '.codex-mcp.json'), json({ mcpServers: { visage: { command: 'node', args: ['./server/visage.js', '--stdio'], cwd: '.', startup_timeout_sec: 20 } } }))
-  writeFileSync(join(plugin, 'README.md'), `# Visage ${version}\n\n${description}\n\nRequires Node.js 20+.\n\n- Claude Code: \`claude --plugin-dir ${plugin}\`\n- Codex: add this folder as a local plugin.\n- Standalone editor: \`node server/visage.js --open\` (http://127.0.0.1:4317).\n\nProjects are listed in \`~/.visage/projects.json\` (override with \`VISAGE_DATA_DIR\`).\n`)
+  // Links in the README point into the Skill folder inside the plugin.
+  const readme = readFileSync(join(harnessDocs, 'README.md'), 'utf8').replace(/\]\((SKILL\.md|references\/)/g, '](skills/visage/$1')
+  writeFileSync(join(plugin, 'README.md'), `${readme}\n---\nVisage ${version}\n`)
   const files = {}
   const walk = folder => {
     for (const entry of readdirSync(folder, { withFileTypes: true })) {

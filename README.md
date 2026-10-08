@@ -1,117 +1,138 @@
 # Visage
 
-Visage is a visual editor for workflows that route agent Skills through explicit state transitions. Each node is a Skill, each output is evaluated before the workflow advances, and a finished workflow is exported as a plugin that Codex or Claude Code runs on its own.
+**Design agent workflows as state machines of Skills, visually or through MCP, and ship them as Claude Code and Codex plugins.**
 
-The current version is **0.2.0**. Everything runs in one Node.js process that serves the editor, a REST API and an MCP server, and the whole app is itself distributed as a Claude Code / Codex plugin.
+Long, multi-step instructions are fragile: agents skip steps, merge them, or carry on after a check has failed. Visage makes the process explicit. Each step is a Skill with its own instructions, each decision is a typed result, and a small runner tells the agent which step comes next, so the order and the checks hold every time.
 
-## Quick start
-
-Requires Node.js 20+.
-
-### As a plugin (recommended)
-
-```bash
-cd server
-npm install
-npm run package          # builds dist/visage/ and dist/visage-<version>.zip
-claude --plugin-dir dist/visage
-```
-
-The plugin registers the `visage` MCP server and a `visage` Skill. Ask the agent to create a workflow or to "open the Visage editor": the server also serves the editor at [http://127.0.0.1:4317](http://127.0.0.1:4317). In Codex, add `server/dist/visage` as a local plugin; it uses `.codex-plugin/plugin.json` and `.codex-mcp.json`.
-
-### Standalone editor
-
-```bash
-cd server && npm install && npm run build
-node build/visage.js --open
-```
-
-### Development
-
-```bash
-cd server && npm install && npm run dev       # API + MCP on :4317, reloads on change
-cd frontend && npm install && npm run dev     # editor with hot reload on :5173, proxied to :4317
-```
+![The Visage editor with a blog-post workflow: Plan, Draft and Review steps, a Revise loop and two final states, with the Inspector showing the Review step's choice evaluation](docs/images/editor.png)
 
 ## How it works
 
-- **Projects** are folders containing `project.json`, `workflow.yaml`, one `skills/<node>/SKILL.md` per step and any imported references. The catalog of project locations is `~/.visage/projects.json` (override with `VISAGE_DATA_DIR`); projects created without a location go to `~/.visage/projects/`.
-- **Editor**: canvas with one Skill node type; initial and final states are markers on nodes. The Inspector edits label, description, arc labels and conditions, the evaluation gate, the Skill Markdown and resource imports.
-- **MCP**: the same process speaks MCP over stdio (`--stdio`, used by the plugin) and over Streamable HTTP at `http://127.0.0.1:4317/mcp`. When several harness sessions start the server, the first one serves the editor and the others reuse it.
-- **Export**: the **Export plugin** button, `POST /api/projects/{id}/export` or the `export_plugin` tool produce a plugin that does not need Visage.
+1. **Design** the workflow on a canvas, or let an agent build it through the `visage` MCP server. Every step gets a `SKILL.md` with its instructions and reference files.
+2. **Decide** with typed results. A step can answer a yes/no question, pick one option, or give a score, and arcs route on that result.
+3. **Export** a plugin. The agent follows an orchestrator Skill, executes one step at a time, and submits each result to a runner that validates it, retries with feedback when it is invalid, and picks the next step.
 
-### Workflow format
+The workflow in the screenshot, as exported to Mermaid:
 
-```yaml
-version: 1
-workflow: {id: review-flow, name: Review flow, version: 0.1.0, description: Used as the exported Skill description}
-start: draft
-max_steps: 50               # stops runaway loops
-nodes:
-  draft:                    # no evaluation: produces files, always continues
-    type: skill
-    skill: {path: skills/draft/SKILL.md}
-    next:
-      - goto: review
-  review:
-    type: skill
-    skill: {path: skills/review/SKILL.md}
-    evaluation:
-      type: choice          # predicate | choice | score
-      question: Is the draft ready to publish?
-      options: [approved, changes, rejected]
-    max_attempts: 3         # an invalid result is retried with feedback
-    on_fail: draft          # after the last invalid attempt; omit to stop the run
-    next:
-      - goto: done
-        when: output.result == "approved"
-      - goto: draft
-        when: output.result == "changes"
-      - goto: archive       # no `when`: otherwise
-  done: {type: skill, terminal: true}
-  archive: {type: skill, terminal: true}
+```mermaid
+stateDiagram-v2
+  direction LR
+  state "Plan" as plan
+  state "Draft" as draft
+  state "Review" as review
+  state "Published" as publish
+  state "Archived" as archive
+  [*] --> plan
+  plan --> draft
+  draft --> review
+  review --> publish : approved
+  review --> draft : Revise
+  review --> archive : rejected
+  note right of review : Is the draft ready to publish?
+  publish --> [*]
+  archive --> [*]
 ```
 
-Every evaluated step returns `{"result": ..., "reason": "..."}`:
+## Features
 
-| Type | `result` | Arcs |
+- **Visual editor**: drag steps, connect them, choose curved, straight or orthogonal lines, and edit each step's Skill in a Markdown editor with its reference files (PDFs, examples, code).
+- **Typed evaluations**: `predicate` (true or false), `choice` (one option from a list) or `score` (0 to 1), with retries, failure routes, and warnings for results that have nowhere to go.
+- **MCP server**: 18 tools let Claude Code, Codex or any MCP client create, edit, validate and export workflows, and open the editor on the project they are working on.
+- **Portable plugins**: an export runs without Visage. It needs only Node.js, in Claude Code, in Codex, or with any agent that can run shell commands.
+- **Shareable output**: export the canvas as a PNG or the flow as a Mermaid diagram for READMEs and pull requests.
+- **Single process**: one Node.js file serves the editor, a REST API and MCP over stdio and HTTP. Visage itself installs as a plugin.
+
+## Quick start
+
+Requires [Node.js](https://nodejs.org) 20 or later.
+
+```bash
+git clone https://github.com/ilexistools/Visage.git
+cd Visage/server
+npm install
+npm run package            # builds dist/visage (the plugin) and dist/visage-<version>.zip
+```
+
+**Claude Code**: start a session with the plugin, then ask for a workflow:
+
+```bash
+claude --plugin-dir dist/visage
+```
+> Create a Visage workflow that plans, writes and reviews a blog post, and open it in the editor.
+
+**Codex**: add `server/dist/visage` as a local plugin.
+
+**Editor only**: `node dist/visage/server/visage.js --open` opens [http://127.0.0.1:4317](http://127.0.0.1:4317).
+
+**Other MCP clients**:
+
+```bash
+claude mcp add visage -- node /path/to/Visage/server/dist/visage/server/visage.js --stdio
+```
+
+## Evaluations
+
+An evaluated step ends with a JSON object such as `{"result": "approved", "reason": "Covers the brief"}`. It can also write files and return other keys, but only `result` chooses the next step.
+
+| Type | `result` | Arcs route on |
 | --- | --- | --- |
 | `predicate` | `true` or `false` | `output.result == true`, `output.result == false` |
-| `choice` | exactly one of `options` | `output.result == "approved"` |
-| `score` | a number from 0 to 1 | `output.result >= 0.8` (also `>`, `<`, `<=`) |
+| `choice` | one of `options` | `output.result == "approved"` |
+| `score` | a number from 0 to 1 | `output.result >= 0.8`, best threshold first |
 
-Steps may also write files and return other keys; only `result` chooses the next step. In the editor, the Inspector sets the type, question and options, and each arc gets a matching selector (yes/no, an option, a score threshold or *otherwise*). Validation warns when a result has no arc. Missing start or final nodes and missing Skill files are saved as warnings and only block export. The older `output_schema` and `checks` fields are ignored with a warning.
+The last arc of a step can have no condition and act as *otherwise*. When a result is invalid, the step is tried again with the validation error as feedback, up to `max_attempts` times in total, then goes to `on_fail`.
 
-`when` expressions are `<path> <operator> <literal>` (`==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`; paths start with `output.` or `state.`) and never execute code.
+A project is a folder you can version with Git:
 
-### MCP tools
-
-`list_projects`, `create_project`, `delete_project`, `get_workflow`, `put_workflow`, `configure_workflow`, `upsert_node`, `remove_node`, `set_transitions`, `set_start`, `validate_project`, `list_files`, `read_file`, `write_file`, `export_plugin` and `open_editor`.
-
-To connect a harness without installing the plugin:
-
-```bash
-claude mcp add visage -- node /path/to/server/build/visage.js --stdio
-codex mcp add visage -- node /path/to/server/build/visage.js --stdio
+```
+blog-post/
+  workflow.yaml             # steps, evaluations and arcs
+  skills/plan/SKILL.md      # instructions for each step
+  skills/review/SKILL.md
+  skills/review/checklist.md
+  dist/blog-post/           # exported plugin
 ```
 
-### Exported workflow plugins
+## Documentation
 
-An export writes `<project>/dist/<plugin>/` and a zip, with `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`:
+| | |
+| --- | --- |
+| [Visage for agent harnesses](docs/harness/README.md) | Installation in Claude Code, Codex and other MCP clients, options, troubleshooting |
+| [MCP tools](docs/harness/references/mcp-tools.md) | Every tool with arguments, results, errors and examples |
+| [Workflow format](docs/harness/references/workflow-format.md) | `workflow.yaml`, evaluations, condition expressions, validation messages |
+| [Authoring guide](docs/harness/references/authoring-guide.md) | How to design steps, write their Skills and handle loops, with patterns |
+| [Exported plugins](docs/harness/references/exported-plugins.md) | Plugin contents and the runner protocol |
 
-- `skills/<plugin>/SKILL.md` is the only discoverable Skill. It tells the agent to drive the run with `scripts/flow.mjs`.
-- `scripts/flow.mjs` (Node.js only, no dependencies) owns the state machine: `start`, `next`, `submit`, `status`. It evaluates each submitted output with the same engine as the editor and returns the next step, a retry with feedback, or the final result. Run state is kept in `.visage/runs/<plugin>/` under the working directory.
-- Node Skills are copied with their resources to `nodes/<node>/STEP.md`, so the harness cannot run them out of order.
+These files also ship inside the Visage plugin, so agents read them directly.
 
-Try one with `claude --plugin-dir <project>/dist/<plugin>`.
-
-## API and development
-
-Routes: `/api/health`, `/api/projects`, `/api/projects/{id}` (rename, delete), `/api/projects/{id}/workflow`, `/api/projects/{id}/validate`, `/api/projects/{id}/files[/path]`, `/api/projects/{id}/export`, `/api/projects/{id}/export.zip` and `/api/folder-picker`. The server binds to `127.0.0.1` and rejects requests whose `Host` or `Origin` is not local, because the API writes project files.
+## Development
 
 ```bash
-cd server && npm test && npm run typecheck
-cd frontend && npm run build
+cd server && npm install && npm run dev      # API + MCP on :4317, reloads on change
+cd frontend && npm install && npm run dev    # editor on :5173 with hot reload
+cd server && npm test && npm run typecheck   # tests, including documentation checks
 ```
 
-Source layout: `server/src/engine.ts` (expressions, schema checks, transitions; shared with the exported runner), `workflow.ts` (validation), `store.ts` and `projects.ts` (catalog and files), `exporter.ts`, `mcp.ts`, `http.ts`, `main.ts`, and `runner/flow.ts` (bundled to `flow.mjs`). `build.mjs` bundles the server into a single `visage.js` with esbuild.
+| Path | Contents |
+| --- | --- |
+| `frontend/` | React + React Flow editor |
+| `server/src/engine.ts` | Expressions, evaluation and transitions, shared with the exported runner |
+| `server/src/workflow.ts`, `projects.ts`, `store.ts` | Validation, project and file operations, catalog |
+| `server/src/mcp.ts`, `http.ts`, `main.ts` | MCP tools, REST API and static editor, process entry point |
+| `server/src/exporter.ts`, `runner/flow.ts`, `mermaid.ts` | Plugin export, the runner bundled as `flow.mjs`, Mermaid diagrams |
+| `server/build.mjs` | Bundles the server into one `visage.js` and assembles the plugin |
+| `docs/harness/` | Documentation for harnesses, packaged into the plugin |
+
+Projects are listed in `~/.visage/projects.json`; set `VISAGE_DATA_DIR` to use another folder.
+
+## Security
+
+Visage listens on `127.0.0.1` only and rejects requests from other websites, because its API writes files. Project files stay inside their project folder. Exported workflows run with the permissions of the agent that runs them, so review a workflow's Skills before running it.
+
+## License
+
+[MIT](LICENSE) © 2026 Ilexis Tools. Workflows you build and export with Visage are yours.
+
+## Status
+
+Visage is at version 0.2.0 and evolving quickly; the workflow format may still change. See the [changelog](CHANGELOG.md).

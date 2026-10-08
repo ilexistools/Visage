@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, getStraightPath, Handle, MarkerType, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type EdgeProps, type Node, type ReactFlowInstance } from '@xyflow/react'
+import { Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getBezierPath, getNodesBounds, getViewportForBounds, getSmoothStepPath, getStraightPath, Handle, MarkerType, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type EdgeProps, type Node, type ReactFlowInstance } from '@xyflow/react'
 import Editor from '@monaco-editor/react'
+import { toPng } from 'html-to-image'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, Magnet, TriangleAlert, Package, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
 import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
 import { conditionSummary } from './evaluation'
@@ -38,7 +39,7 @@ function InlineText({ value, onCommit, tag = 'span', className = '', title, plac
 function FlowNode({ data, selected }: any) {
   const used = new Set<string>(data.usedHandles || [])
   return <div className={`flow-node ${data.kind} ${data.isFinal ? 'final' : ''} ${data.status || ''} ${selected ? 'selected' : ''}`}>
-    {data.isInitial && <svg className="initial-state-arrow" viewBox="0 0 24 30" aria-label="Initial state"><path d="M1 1 L22 15 L1 29 Z" /></svg>}
+    {data.isInitial && <svg className="initial-state-arrow" viewBox="0 0 24 30" aria-label="Initial state"><path d="M1 1 L22 15 L1 29 Z" fill="none" stroke="#42536a" strokeWidth={1.5} strokeLinejoin="round" /></svg>}
     {(Object.keys(PORT_SLOTS) as PortSide[]).flatMap(side => PORT_SLOTS[side].map((offset, slot) => <FlowPort key={portId(side, slot)} id={portId(side, slot)} side={side} offset={offset} used={used.has(portId(side, slot))} />))}
     <InlineText tag="strong" className="flow-node-title" value={data.label} onCommit={data.onLabelChange} title={data.label ? `${data.label}\n\nDouble-click to edit label` : 'Double-click to edit label'} />
     <InlineText className="flow-node-description" value={data.description || ''} onCommit={data.onDescriptionChange} title={data.description ? `${data.description}\n\nDouble-click to edit description` : 'Double-click to edit description'} />
@@ -54,7 +55,7 @@ function FlowEdge(props: EdgeProps) {
     : getSmoothStepPath({ ...ends, offset: 18, ...(data?.ports ? routeCenter(data.ports, { x: props.sourceX, y: props.sourceY }, { x: props.targetX, y: props.targetY }) : {}) })
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} interactionWidth={20} />
-    <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data?.question && <span className="arc-question" title={data.question}>{data.question}</span>}<InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
+    <EdgeLabelRenderer><div className={`editable-arc-label nodrag nopan ${!props.label && !data?.condition && !data?.question ? 'empty-label' : ''}`} style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data?.question && <span className="arc-question" title={data.question}>{data.question}</span>}<InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
   </>
 }
 const edgeTypes = { editable: FlowEdge }
@@ -121,6 +122,24 @@ export default function App() {
   const renderedSkillMarkdown = useMemo(() => DOMPurify.sanitize(marked.parse(skillMarkdown) as string), [skillMarkdown])
 
   useEffect(() => { localStorage.setItem('vasm-explorer-width', String(explorerWidth)) }, [explorerWidth])
+  const [explorerCollapsed, setExplorerCollapsed] = useState(() => { try { return localStorage.getItem('vasm-explorer-collapsed') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('vasm-explorer-collapsed', explorerCollapsed ? '1' : '0') } catch { /* storage unavailable */ } }, [explorerCollapsed])
+  const toggleExplorer = useCallback(() => {
+    if (window.matchMedia('(max-width: 600px)').matches) setMobileProjectOpen(open => !open)
+    else setExplorerCollapsed(collapsed => !collapsed)
+  }, [])
+  // Cmd/Ctrl+B shows or hides the Explorer, as in VS Code, except while typing.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'b') return
+      const target = event.target
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], .monaco-editor')) return
+      event.preventDefault()
+      toggleExplorer()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleExplorer])
   useEffect(() => { localStorage.setItem('vasm-inspector-width', String(inspectorWidth)) }, [inspectorWidth])
   useEffect(() => {
     if (!contextMenu) return
@@ -141,7 +160,51 @@ export default function App() {
 
   const [lineStyle, setLineStyle] = useState<LineStyle>(readLineStyle)
   useEffect(() => { try { localStorage.setItem('vasm-line-style', lineStyle) } catch { /* storage unavailable */ } }, [lineStyle])
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const close = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('.export-wrap')) setExportMenuOpen(false) }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setExportMenuOpen(false) }
+    document.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape) }
+  }, [exportMenuOpen])
+  const download = (url: string, filename: string) => {
+    const link = document.createElement('a'); link.href = url; link.download = filename
+    document.body.appendChild(link); link.click(); link.remove()
+    if (url.startsWith('blob:')) window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+  /** Capture the whole flow, not just the visible area, as a PNG with a white margin. */
+  const exportImage = async () => {
+    setExportMenuOpen(false)
+    const flow = document.querySelector<HTMLElement>('.react-flow')
+    const viewport = flow?.querySelector<HTMLElement>('.react-flow__viewport')
+    if (!flowInstance || !flow || !viewport || !nodes.length) { tell('Add steps to the canvas before exporting an image.'); return }
+    const bounds = getNodesBounds(flowInstance.getNodes())
+    const margin = 60
+    const width = Math.min(6000, Math.ceil(bounds.width + margin * 2))
+    const height = Math.min(6000, Math.ceil(bounds.height + margin * 2))
+    const { x, y, zoom } = getViewportForBounds(bounds, width, height, 0.2, 1, margin / Math.max(width, height))
+    // Hide editing chrome (connection points, selection, empty "+" labels) while capturing.
+    flow.classList.add('exporting')
+    try {
+      const url = await toPng(viewport, { backgroundColor: '#ffffff', width, height, pixelRatio: 2, style: { width: `${width}px`, height: `${height}px`, transform: `translate(${x}px, ${y}px) scale(${zoom})` } })
+      download(url, `${projectId || 'workflow'}.png`)
+    } catch (error) { tell(`Could not export the image: ${(error as Error).message}`) } finally { flow.classList.remove('exporting') }
+  }
+  const exportDiagram = async () => {
+    setExportMenuOpen(false)
+    if (!projectId) return
+    if ((dirty || yamlDirty) && !(await saveWorkflow())) return
+    try {
+      const response = await fetch(`/api/projects/${projectId}/diagram.mmd`)
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || response.statusText)
+      download(URL.createObjectURL(await response.blob()), `${projectId}.mmd`)
+      setNotice('Mermaid diagram downloaded. Paste it in a ```mermaid block in a README or open it in mermaid.live. Exported plugins include it in their README.')
+    } catch (error) { tell(`Could not export the diagram: ${(error as Error).message}`) }
+  }
   const exportPlugin = async () => {
+    setExportMenuOpen(false)
     if (!projectId) return
     if (!Object.keys(workflow.nodes).length) { tell('Add Skill nodes and a final state before exporting.'); return }
     if ((dirty || yamlDirty) && !(await saveWorkflow())) return
@@ -156,10 +219,7 @@ export default function App() {
         throw new Error(`Export failed: ${message}`)
       }
       const filename = /filename="?([^";]+)"?/.exec(response.headers.get('content-disposition') || '')?.[1] || `${projectId}.zip`
-      const url = URL.createObjectURL(await response.blob())
-      const link = document.createElement('a'); link.href = url; link.download = filename
-      document.body.appendChild(link); link.click(); link.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      download(URL.createObjectURL(await response.blob()), filename)
       setNotice(`Plugin exported to the project's dist/ folder and downloaded as ${filename}.`)
     } catch (e) { tell(e) } finally { setBusy(false) }
   }
@@ -429,6 +489,21 @@ export default function App() {
     }, 700)
     return () => window.clearTimeout(timer)
   }, [skillBusy, skillDirty, skillEditorOpen, skillEditorPath, projectId, skillMarkdown])
+  // Files imported for the selected step live next to its SKILL.md.
+  const selectedSkillPath: string = (selectedNode && workflow.nodes[selectedNode]?.skill?.path) || ''
+  const skillDirectory = selectedSkillPath.includes('/') ? selectedSkillPath.slice(0, selectedSkillPath.lastIndexOf('/') + 1) : ''
+  const skillResources = skillDirectory ? files.filter(path => path.startsWith(skillDirectory) && path !== selectedSkillPath).sort() : []
+  const [confirmingDelete, setConfirmingDelete] = useState('')
+  useEffect(() => setConfirmingDelete(''), [selectedNode])
+  const deleteResource = async (path: string) => {
+    if (!projectId) return
+    setSkillBusy(true)
+    try {
+      await del(`/projects/${projectId}/files/${encodedProjectPath(path)}`)
+      setFiles(await api(`/projects/${projectId}/files`))
+      setConfirmingDelete('')
+    } catch (error) { tell(error) } finally { setSkillBusy(false) }
+  }
   const importSkillFiles = async (incoming: FileList | null) => {
     if (!incoming?.length || !projectId || !selected?.skill?.path) return
     const skillDirectory = selected.skill.path.slice(0, selected.skill.path.lastIndexOf('/') + 1)
@@ -484,8 +559,9 @@ export default function App() {
     handle.setPointerCapture(event.pointerId)
     const move = (pointer: PointerEvent) => {
       const delta = (pointer.clientX - startX) * (side === 'left' ? 1 : -1)
-      const width = Math.max(160, Math.min(440, initialWidth + delta))
-      currentWidth = width
+      // currentWidth keeps the unclamped width so dragging far enough collapses the panel.
+      currentWidth = initialWidth + delta
+      const width = Math.max(160, Math.min(440, currentWidth))
       if (panel === 'explorer') setExplorerWidth(width)
       else setInspectorWidth(width)
     }
@@ -493,8 +569,10 @@ export default function App() {
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)
       handle.removeEventListener('pointercancel', end)
-      if (panel === 'explorer') setExplorerWidth(currentWidth)
-      else {
+      if (panel === 'explorer') {
+        setExplorerWidth(currentWidth < 90 ? initialWidth : Math.max(160, Math.min(440, currentWidth)))
+        setExplorerCollapsed(currentWidth < 90)
+      } else {
         if (currentWidth < 90) setInspectorWidth(initialWidth)
         setInspectorCollapsed(currentWidth < 90)
       }
@@ -508,18 +586,22 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion && <span className="app-version" title={`Visage ${appVersion}`}>v{appVersion}</span>}</div>
-      <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<button className="button subtle icon-button" data-tooltip="Export plugin" aria-label="Export plugin" onClick={exportPlugin} disabled={!projectId || busy}><Package size={15} /></button></div>
+      <div className="brand"><button className="icon-plain explorer-toggle" aria-label={explorerCollapsed ? 'Show Explorer' : 'Hide Explorer'} aria-pressed={!explorerCollapsed} title={`${explorerCollapsed ? 'Show' : 'Hide'} Explorer (${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}B)`} onClick={toggleExplorer}>{explorerCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><div className="brand-mark"><Workflow size={21} /></div><strong>Visage</strong>{appVersion && <span className="app-version" title={`Visage ${appVersion}`}>v{appVersion}</span>}</div>
+      <div className="top-actions">{!!warnings.length && <div className="warnings-wrap"><button className="button subtle warnings-button" aria-label={`${warnings.length} workflow warning(s)`} title="Workflow warnings" aria-expanded={warningsOpen} onClick={() => setWarningsOpen(open => !open)}><TriangleAlert size={14} />{warnings.length}</button>{warningsOpen && <div className="warnings-panel" role="dialog" aria-label="Workflow warnings"><span className="eyebrow">WARNINGS</span><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><p className="helper">Warnings do not block saving. Fix them before exporting the plugin.</p></div>}</div>}<div className="export-wrap"><button className="button subtle icon-button" data-tooltip="Export" aria-label="Export" aria-haspopup="menu" aria-expanded={exportMenuOpen} onClick={() => setExportMenuOpen(open => !open)} disabled={!projectId || busy}><Package size={15} /></button>{exportMenuOpen && <div className="project-menu export-menu" role="menu">
+        <button role="menuitem" onClick={exportPlugin}><Package size={14} /><span><strong>Plugin</strong><small>Claude Code and Codex (.zip)</small></span></button>
+        <button role="menuitem" onClick={exportImage}><ImageIcon size={14} /><span><strong>Image</strong><small>The flow as shown (.png)</small></span></button>
+        <button role="menuitem" onClick={exportDiagram}><FileCode2 size={14} /><span><strong>Diagram</strong><small>Mermaid, for READMEs and docs (.mmd)</small></span></button>
+      </div>}</div></div>
     </header>
 
-    <div className="workspace" style={{ '--left-panel-width': `${explorerWidth}px`, '--right-panel-width': `${selected && !inspectorCollapsed ? inspectorWidth : 0}px` } as React.CSSProperties}>
-      <aside className={`sidebar dock-left ${mobileProjectOpen ? 'open' : ''}`}>
+    <div className="workspace" style={{ '--left-panel-width': `${explorerCollapsed ? 0 : explorerWidth}px`, '--left-resize-width': explorerCollapsed ? '0px' : '7px', '--right-panel-width': `${selected && !inspectorCollapsed ? inspectorWidth : 0}px` } as React.CSSProperties}>
+      <aside className={`sidebar dock-left ${mobileProjectOpen ? 'open' : ''} ${explorerCollapsed ? 'collapsed' : ''}`} aria-hidden={explorerCollapsed && !mobileProjectOpen}>
         <div className="sidebar-title">EXPLORER <div className="sidebar-title-actions"><button className="icon-plain" title="New project" onClick={createProject}><Plus size={16} /></button></div></div>
         <div className="sidebar-section"><div className="section-heading"><Folder size={15} /> PROJECTS</div>{projects.map(project => <div className={`project-item-row ${project.id === projectId ? 'active' : ''}`} key={project.id}><button className="tree-item project-select" title={project.root_path || project.name} onClick={() => loadProject(project.id)}><span className="tree-dot" />{project.name}</button><div className="project-menu-wrap"><button className="project-more" aria-label={`Options for ${project.name}`} title="Project options" aria-haspopup="menu" aria-expanded={projectMenuId === project.id} onClick={event => { event.stopPropagation(); setProjectMenuId(value => value === project.id ? '' : project.id) }}><Ellipsis size={17} /></button>{projectMenuId === project.id && <div className="project-menu" role="menu"><button role="menuitem" onClick={() => renameProject(project)}><Pencil size={14} />Rename project</button><button role="menuitem" className="danger" onClick={() => confirmDeleteProject(project)}><Trash2 size={14} />Delete project</button></div>}</div></div>)}{!projects.length && <div className="empty-small">Create a project to begin.</div>}</div>
       </aside>
       {mobileProjectOpen && <div className="mobile-sidebar-backdrop" onClick={() => setMobileProjectOpen(false)} />}
 
-      <div className="resize-handle left" role="separator" aria-orientation="vertical" aria-label="Resize Explorer" aria-valuemin={160} aria-valuemax={440} aria-valuenow={explorerWidth} tabIndex={0} onPointerDown={event => beginResize('left', event)} onKeyDown={event => { if (event.key === 'ArrowLeft') setExplorerWidth(value => Math.min(440, value + 12)); if (event.key === 'ArrowRight') setExplorerWidth(value => Math.max(160, value - 12)) }}><GripVertical size={13} /></div>
+      {!explorerCollapsed && <div className="resize-handle left" role="separator" aria-orientation="vertical" aria-label="Resize Explorer" aria-valuemin={160} aria-valuemax={440} aria-valuenow={explorerWidth} tabIndex={0} onPointerDown={event => beginResize('left', event)} onKeyDown={event => { if (event.key === 'ArrowRight') setExplorerWidth(value => Math.min(440, value + 12)); if (event.key === 'ArrowLeft') setExplorerWidth(value => Math.max(160, value - 12)) }}><GripVertical size={13} /></div>}
 
       <main className="main-area">
         <div className="canvas-wrap">
@@ -556,7 +638,17 @@ export default function App() {
             const disabled = (state === 'normal' || state === 'final') && workflow.start === selectedNode && Object.keys(workflow.nodes).length === 1
             return <label key={state} className={checked ? 'checked' : ''}><input type="radio" name="node-state" value={state} checked={checked} disabled={disabled} onChange={() => setNodeState(selectedNode!, state)} />{state === 'initial' ? 'Initial' : state === 'final' ? 'Final' : 'Normal'}</label>
           })}</div></fieldset>
-          <div className="field node-skill-actions"><label>Skill</label><button type="button" className="button skill-open-button" onClick={openSkillEditor} disabled={skillBusy}><BookOpen size={15} /> Edit Skill Markdown</button><input ref={importSkillInput} type="file" multiple hidden onChange={event => importSkillFiles(event.target.files)} /><button type="button" className="button skill-import-button" onClick={() => importSkillInput.current?.click()} disabled={skillBusy}><Upload size={15} /> Import files</button><p className="helper">Markdown, PDF, code and other reference files.</p></div>
+          <div className="field node-skill-actions"><label>Skill</label><button type="button" className="button skill-open-button" onClick={openSkillEditor} disabled={skillBusy}><BookOpen size={15} /> Edit Skill Markdown</button><input ref={importSkillInput} type="file" multiple hidden onChange={event => importSkillFiles(event.target.files)} /><button type="button" className="button skill-import-button" onClick={() => importSkillInput.current?.click()} disabled={skillBusy}><Upload size={15} /> Import files</button><p className="helper">Markdown, PDF, code and other reference files.</p>
+            {!!skillResources.length && <ul className="skill-resources" aria-label="Imported files">{skillResources.map(path => {
+              const name = path.slice(skillDirectory.length)
+              return <li key={path} className={confirmingDelete === path ? 'confirming' : ''}>
+                <FileText size={13} /><span className="resource-name" title={path}>{name}</span>
+                {confirmingDelete === path
+                  ? <span className="resource-confirm"><button type="button" className="resource-delete-confirm" disabled={skillBusy} onClick={() => deleteResource(path)}>Delete</button><button type="button" className="resource-cancel" onClick={() => setConfirmingDelete('')}>Cancel</button></span>
+                  : <button type="button" className="icon-plain resource-delete" aria-label={`Delete ${name}`} title="Delete file" disabled={skillBusy} onClick={() => setConfirmingDelete(path)}><Trash2 size={13} /></button>}
+              </li>
+            })}</ul>}
+          </div>
           {!selected.terminal && <EvaluationEditor key={selectedNode} node={selected} nodeId={selectedNode!} nodes={workflow.nodes} onChange={patch => updateNode(selectedNode!, patch)} />}
           {!selected.terminal && <div className="field"><label>Next steps</label><ArcConditions node={selected} nodes={workflow.nodes} onChange={next => updateNode(selectedNode!, { next })} /></div>}
         </div>

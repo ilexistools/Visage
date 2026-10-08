@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import type { Evaluation, Transition, Workflow, WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, defaultProjectsDir, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
@@ -178,7 +178,8 @@ export function upsertNode(id: string, nodeId: string, input: NodeInput) {
       inside(projectDir(id), path)
       markdown = { path, content: input.skill_markdown }
     }
-    if (!workflow.start) workflow.start = nodeId
+    // The first step becomes the start; a final state never does.
+    if (!workflow.start && !node.terminal) workflow.start = nodeId
     return { node_id: nodeId, created }
   })
   // Written after the workflow validated, so a rejected change leaves no stray file.
@@ -205,6 +206,9 @@ export function setTransitions(id: string, nodeId: string, transitions: Transiti
     if (node.terminal) throw badRequest('Final nodes cannot have transitions')
     // Keep connection points the user pinned in the editor for arcs that still go to the same node.
     const previous = [...(node.next ?? [])]
+    for (const { goto, when } of transitions) {
+      if (typeof when === 'string' && !when.trim()) throw badRequest(`Arc to ${goto}: when cannot be empty; leave it out for the otherwise arc`)
+    }
     node.next = transitions.map(({ goto, when, label }) => {
       const match = previous.findIndex(transition => transition.goto === goto)
       const pins = match >= 0 ? previous.splice(match, 1)[0] : undefined
@@ -254,9 +258,25 @@ export function readFile(id: string, path: string): string {
   return readFileSync(target, 'utf8')
 }
 
+/** Delete a project file such as an imported reference. Workflow, metadata and used Skills are protected. */
+export function deleteFile(id: string, path: string) {
+  const root = projectDir(id)
+  const target = inside(root, path)
+  const relativePath = relative(root, target).split(sep).join('/')
+  if (relativePath === 'workflow.yaml' || relativePath === 'project.json') throw badRequest(`${relativePath} cannot be deleted`)
+  if (Object.values(load(id).nodes).some(node => node?.skill?.path === relativePath)) throw badRequest(`${relativePath} is used by a step; change the step's Skill first`)
+  if (!existsSync(target)) throw notFound(`File not found: ${relativePath}`)
+  if (!statSync(target).isFile()) throw badRequest('Only files can be deleted')
+  unlinkSync(target)
+  return { path: relativePath, status: 'deleted' }
+}
+
 export function writeFile(id: string, path: string, content: string, encoding: 'utf-8' | 'base64' = 'utf-8') {
   const root = projectDir(id)
   const target = inside(root, path)
+  // These files are only changed through validated operations.
+  if (target === join(resolve(root), 'workflow.yaml')) throw badRequest('workflow.yaml is changed with the workflow tools (put_workflow, upsert_node, set_transitions...), which validate it')
+  if (target === join(resolve(root), 'project.json')) throw badRequest('project.json is managed by Visage')
   if (target === resolve(root)) throw badRequest('Invalid project file path')
   let bytes: Buffer
   if (encoding === 'base64') {

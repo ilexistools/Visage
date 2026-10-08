@@ -42,6 +42,7 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
   const warnings: string[] = []
   if (typeof workflow.start !== 'string') fail('start must be a node ID')
   if (!Object.hasOwn(nodes, workflow.start)) readiness.push('Start node must exist')
+  else if (nodes[workflow.start]?.terminal && ids.length > 1) readiness.push(`Start node ${workflow.start} is a final state, so the run would end at once; use set_start on the first step`)
   if (!Object.values(nodes).some(node => node?.terminal)) readiness.push('Workflow needs a terminal node')
   for (const [id, node] of Object.entries(nodes)) {
     checkedId(id)
