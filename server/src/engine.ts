@@ -7,7 +7,8 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type JsonObject = { [key: string]: Json }
 export type Check = { when: string; message?: string }
-export type Transition = { goto: string; when?: string; label?: string }
+/** source_handle / target_handle pin the arc to editor connection points; they do not affect execution. */
+export type Transition = { goto: string; when?: string; label?: string; source_handle?: string; target_handle?: string }
 export type WorkflowNode = {
   type?: string
   label?: string

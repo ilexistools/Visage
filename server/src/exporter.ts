@@ -39,6 +39,8 @@ function portableWorkflow(workflow: Workflow, name: string): Portable {
   for (const [id, node] of Object.entries(workflow.nodes)) {
     const keep: PortableNode = {}
     for (const key of PORTABLE_KEYS) if (node[key] !== undefined) (keep as Record<string, unknown>)[key] = node[key]
+    // Connection points are editor layout only.
+    if (keep.next) keep.next = keep.next.map(({ goto, when, label }) => ({ goto, ...(when ? { when } : {}), ...(label ? { label } : {}) }))
     if (!node.terminal) keep.step = `nodes/${id}/STEP.md`
     nodes[id] = keep
   }

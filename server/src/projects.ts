@@ -156,7 +156,17 @@ export function setTransitions(id: string, nodeId: string, transitions: Transiti
   const workflow = load(id)
   const node = nodeOf(workflow, nodeId)
   if (node.terminal) throw badRequest('Final nodes cannot have transitions')
-  node.next = transitions.map(({ goto, when, label }) => ({ goto, ...(when ? { when } : {}), ...(label ? { label } : {}) }))
+  // Keep connection points the user pinned in the editor for arcs that still go to the same node.
+  const previous = [...(node.next ?? [])]
+  node.next = transitions.map(({ goto, when, label }) => {
+    const match = previous.findIndex(transition => transition.goto === goto)
+    const pins = match >= 0 ? previous.splice(match, 1)[0] : undefined
+    return {
+      goto, ...(when ? { when } : {}), ...(label ? { label } : {}),
+      ...(pins?.source_handle ? { source_handle: pins.source_handle } : {}),
+      ...(pins?.target_handle ? { target_handle: pins.target_handle } : {}),
+    }
+  })
   return save(id, workflow)
 }
 

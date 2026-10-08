@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Background, BaseEdge, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type EdgeProps, type Node, type ReactFlowInstance } from '@xyflow/react'
+import { Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, getStraightPath, Handle, MarkerType, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type EdgeProps, type Node, type ReactFlowInstance } from '@xyflow/react'
 import Editor from '@monaco-editor/react'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, Package, Pencil, Plus, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, Magnet, Package, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
+import { defaultPosition, edgeId, layoutEdgePorts, parsePortId, PORT_SLOTS, portId, routeCenter, type EdgePorts, type PortSide } from './edgeLayout'
 
 type WorkflowDoc = { version: number; workflow: { id: string; name: string; version: string }; start: string; nodes: Record<string, any> }
 type Project = { id: string; name: string; root_path?: string }
@@ -59,21 +60,22 @@ function ChecksField({ value, onCommit }: { value: Check[] | undefined; onCommit
 }
 
 function FlowNode({ data, selected }: any) {
-  const incomingHandles = data.incomingHandles?.length ? data.incomingHandles : data.kind === 'start' ? [] : [{ id: `${data.nodeId}-in-default`, side: 'left', offset: 50 }]
-  const outgoingHandles = data.outgoingHandles?.length ? data.outgoingHandles : data.kind === 'end' || data.terminal ? [] : [{ id: `${data.nodeId}-out-default`, side: 'right', offset: 50 }]
+  const used = new Set<string>(data.usedHandles || [])
   return <div className={`flow-node ${data.kind} ${data.isFinal ? 'final' : ''} ${data.status || ''} ${selected ? 'selected' : ''}`}>
     {data.isInitial && <svg className="initial-state-arrow" viewBox="0 0 24 30" aria-label="Initial state"><path d="M1 1 L22 15 L1 29 Z" /></svg>}
-    {incomingHandles.map((handle: any) => <FlowPort key={handle.id} {...handle} type="target" />)}
-    <InlineText tag="strong" className="flow-node-title" value={data.label} onCommit={data.onLabelChange} title="Double-click to edit label" />
-    <InlineText className="flow-node-description" value={data.description || ''} onCommit={data.onDescriptionChange} title="Double-click to edit description" />
-    {outgoingHandles.map((handle: any) => <FlowPort key={handle.id} {...handle} type="source" />)}
+    {(Object.keys(PORT_SLOTS) as PortSide[]).flatMap(side => PORT_SLOTS[side].map((offset, slot) => <FlowPort key={portId(side, slot)} id={portId(side, slot)} side={side} offset={offset} used={used.has(portId(side, slot))} />))}
+    <InlineText tag="strong" className="flow-node-title" value={data.label} onCommit={data.onLabelChange} title={data.label ? `${data.label}\n\nDouble-click to edit label` : 'Double-click to edit label'} />
+    <InlineText className="flow-node-description" value={data.description || ''} onCommit={data.onDescriptionChange} title={data.description ? `${data.description}\n\nDouble-click to edit description` : 'Double-click to edit description'} />
   </div>
 }
 const nodeTypes = { vasm: FlowNode }
 
 function FlowEdge(props: EdgeProps) {
-  const [path, labelX, labelY] = getSmoothStepPath({ sourceX: props.sourceX, sourceY: props.sourceY, sourcePosition: props.sourcePosition, targetX: props.targetX, targetY: props.targetY, targetPosition: props.targetPosition })
-  const data = props.data as { onLabelChange?: (value: string) => void } | undefined
+  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle } | undefined
+  const ends = { sourceX: props.sourceX, sourceY: props.sourceY, sourcePosition: props.sourcePosition, targetX: props.targetX, targetY: props.targetY, targetPosition: props.targetPosition }
+  const [path, labelX, labelY] = data?.lineStyle === 'straight' ? getStraightPath(ends)
+    : data?.lineStyle === 'curved' ? getBezierPath({ ...ends, curvature: 0.3 })
+    : getSmoothStepPath({ ...ends, offset: 18, ...(data?.ports ? routeCenter(data.ports, { x: props.sourceX, y: props.sourceY }, { x: props.targetX, y: props.targetY }) : {}) })
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} interactionWidth={20} />
     <EdgeLabelRenderer><div className="editable-arc-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}><InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder="+" /></div></EdgeLabelRenderer>
@@ -81,54 +83,22 @@ function FlowEdge(props: EdgeProps) {
 }
 const edgeTypes = { editable: FlowEdge }
 
-type PortSide = 'left' | 'right' | 'top' | 'bottom'
-type EdgePorts = { sourceHandle: string; targetHandle: string; sourceSide: PortSide; targetSide: PortSide; sourceOffset: number; targetOffset: number }
-const portDirections: Record<PortSide, [number, number]> = { right: [1, 0], bottom: [0, 1], left: [-1, 0], top: [0, -1] }
-const portPosition = (side: PortSide) => ({ left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom })[side]
-
-function FlowPort({ id, side, offset, type }: { id: string; side: PortSide; offset: number; type: 'source' | 'target' }) {
-  const style = side === 'left' || side === 'right' ? { top: `${offset}%` } : { left: `${offset}%` }
-  return <Handle id={id} type={type} position={portPosition(side)} style={style} />
+type LineStyle = 'curved' | 'straight' | 'step'
+const LINE_STYLES: { value: LineStyle; label: string; icon: typeof Spline }[] = [
+  { value: 'curved', label: 'Curved lines', icon: Spline },
+  { value: 'straight', label: 'Straight lines', icon: Slash },
+  { value: 'step', label: 'Orthogonal lines', icon: CornerDownRight },
+]
+const readLineStyle = (): LineStyle => {
+  try { const value = localStorage.getItem('vasm-line-style'); return value === 'curved' || value === 'straight' ? value : 'step' } catch { return 'step' }
 }
 
-function layoutEdgePorts(workflow: WorkflowDoc): Record<string, EdgePorts> {
-  const nodeEntries = Object.entries(workflow.nodes || {})
-  const positions = new Map(nodeEntries.map(([id, node], index) => [id, node.position || { x: 100 + (index % 3) * 260, y: 120 + Math.floor(index / 3) * 190 }]))
-  const edges = nodeEntries.flatMap(([source, node]) => (node.next || []).map((next: any, index: number) => ({ id: `${source}-${next.goto}-${index}`, source, target: next.goto })))
-  const result: Record<string, EdgePorts> = {}
+const portPosition = (side: PortSide) => ({ left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom })[side]
 
-  const assign = (ownerKey: 'source' | 'target', otherKey: 'source' | 'target', sideKey: 'sourceSide' | 'targetSide', offsetKey: 'sourceOffset' | 'targetOffset') => {
-    const groups = new Map<string, typeof edges>()
-    edges.forEach(edge => groups.set(edge[ownerKey], [...(groups.get(edge[ownerKey]) || []), edge]))
-    groups.forEach((group, owner) => {
-      const used: Record<PortSide, number> = { left: 0, right: 0, top: 0, bottom: 0 }
-      const bySide = new Map<PortSide, string[]>()
-      group.forEach(edge => {
-        const from = positions.get(owner) || { x: 0, y: 0 }
-        const to = positions.get(edge[otherKey]) || { x: 0, y: 0 }
-        const dx = to.x - from.x
-        const dy = to.y - from.y
-        const distance = Math.hypot(dx, dy) || 1
-        const side = (Object.keys(portDirections) as PortSide[]).map(candidate => {
-          const [vx, vy] = portDirections[candidate]
-          const alignment = (dx * vx + dy * vy) / distance
-          const duplicatePenalty = used[candidate] ? 1.05 + used[candidate] * 0.1 : 0
-          return { candidate, score: alignment - duplicatePenalty }
-        }).sort((a, b) => b.score - a.score)[0].candidate
-        used[side] += 1
-        bySide.set(side, [...(bySide.get(side) || []), edge.id])
-        result[edge.id] ||= { sourceHandle: `${edge.id}-out`, targetHandle: `${edge.id}-in`, sourceSide: 'right', targetSide: 'left', sourceOffset: 50, targetOffset: 50 }
-        result[edge.id][sideKey] = side
-      })
-      bySide.forEach(edgeIds => edgeIds.forEach((edgeId, index) => {
-        result[edgeId][offsetKey] = ((index + 1) / (edgeIds.length + 1)) * 100
-      }))
-    })
-  }
-
-  assign('source', 'target', 'sourceSide', 'sourceOffset')
-  assign('target', 'source', 'targetSide', 'targetOffset')
-  return result
+/** A connection point; with ConnectionMode.Loose every point can start or end an arc. */
+function FlowPort({ id, side, offset, used }: { id: string; side: PortSide; offset: number; used: boolean }) {
+  const style = side === 'left' || side === 'right' ? { top: `${offset}%` } : { left: `${offset}%` }
+  return <Handle id={id} type="source" position={portPosition(side)} style={style} className={used ? 'port-used' : ''} />
 }
 
 export default function App() {
@@ -193,6 +163,8 @@ export default function App() {
     return () => { document.removeEventListener('pointerdown', closeMenu); window.removeEventListener('keydown', closeOnEscape) }
   }, [projectMenuId])
 
+  const [lineStyle, setLineStyle] = useState<LineStyle>(readLineStyle)
+  useEffect(() => { try { localStorage.setItem('vasm-line-style', lineStyle) } catch { /* storage unavailable */ } }, [lineStyle])
   const exportPlugin = async () => {
     if (!projectId) return
     if (!Object.keys(workflow.nodes).length) { tell('Add Skill nodes and a final state before exporting.'); return }
@@ -234,30 +206,27 @@ export default function App() {
 
 
   useEffect(() => {
-    const ports = layoutEdgePorts(workflow)
+    const ports = layoutEdgePorts(workflow.nodes)
     const mappedNodes: Node[] = Object.entries(workflow.nodes || {}).map(([id, node], index) => ({
-      id, type: 'vasm', position: node.position || { x: 100 + (index % 3) * 260, y: 120 + Math.floor(index / 3) * 190 },
+      id, type: 'vasm', position: node.position || defaultPosition(index),
       data: {
         nodeId: id, kind: 'skill', label: node.label || defaultNodeLabel(node.type), description: node.description || '', skill: node.skill?.path, terminal: node.terminal, isInitial: workflow.start === id, isFinal: !!node.terminal,
         onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], label } } })); setDirty(true) },
         onDescriptionChange: (description: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], description } } })); setDirty(true) },
-        outgoingHandles: (node.terminal ? [] : node.next || []).map((next: any, index: number) => {
-          const port = ports[`${id}-${next.goto}-${index}`]
-          return { id: port.sourceHandle, side: port.sourceSide, offset: port.sourceOffset }
-        }),
-        incomingHandles: Object.entries(workflow.nodes || {}).flatMap(([source, sourceNode]) => (sourceNode.next || []).flatMap((next: any, edgeIndex: number) => next.goto === id ? (() => {
-          const port = ports[`${source}-${id}-${edgeIndex}`]
-          return [{ id: port.targetHandle, side: port.targetSide, offset: port.targetOffset }]
-        })() : [])),
+        usedHandles: Object.entries(workflow.nodes || {}).flatMap(([source, sourceNode]) => (sourceNode.terminal ? [] : sourceNode.next || []).flatMap((next: any, index: number) => {
+          const port = ports[edgeId(source, next.goto, index)]
+          if (!port) return []
+          return [...(source === id ? [port.sourceHandle] : []), ...(next.goto === id ? [port.targetHandle] : [])]
+        })),
       },
     }))
-    const mappedEdges: Edge[] = Object.entries(workflow.nodes || {}).flatMap(([id, node]) => (node.terminal ? [] : node.next || []).map((next: any, index: number) => ({
-      id: `${id}-${next.goto}-${index}`, source: id, target: next.goto, sourceHandle: ports[`${id}-${next.goto}-${index}`].sourceHandle, targetHandle: ports[`${id}-${next.goto}-${index}`].targetHandle, label: next.label || '', type: 'editable', data: { onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
+    const mappedEdges: Edge[] = Object.entries(workflow.nodes || {}).flatMap(([id, node]) => (node.terminal ? [] : node.next || []).flatMap((next: any, index: number) => !ports[edgeId(id, next.goto, index)] ? [] : [{
+      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
       markerEnd: { type: MarkerType.Arrow, color: '#667b99', width: 14, height: 14 },
       style: { stroke: '#667b99', strokeWidth: 2.2 }, labelStyle: { fill: '#64748b', fontSize: 11 },
-    })))
+    }]))
     setNodes(mappedNodes); setEdges(mappedEdges)
-  }, [workflow, setNodes, setEdges])
+  }, [workflow, lineStyle, setNodes, setEdges])
 
   const updateNode = (id: string, patch: Record<string, unknown>) => {
     const node = { ...workflow.nodes[id], ...patch }
@@ -268,7 +237,13 @@ export default function App() {
   const onConnect = (connection: Connection) => {
     if (!connection.source || !connection.target) return
     const current = workflow.nodes[connection.source]
-    updateNode(connection.source, { next: [...(current.next || []), { goto: connection.target }] })
+    if (current.terminal) { tell('Final states cannot have outgoing connections.'); return }
+    // Keep the points the user connected so the arc stays where it was drawn.
+    const pins = {
+      ...(parsePortId(connection.sourceHandle) ? { source_handle: connection.sourceHandle } : {}),
+      ...(parsePortId(connection.targetHandle) ? { target_handle: connection.targetHandle } : {}),
+    }
+    updateNode(connection.source, { next: [...(current.next || []), { goto: connection.target, ...pins }] })
   }
   const openContextMenu = (event: MouseEvent | ReactMouseEvent, target: ContextTarget = null) => {
     event.preventDefault(); event.stopPropagation()
@@ -294,6 +269,22 @@ export default function App() {
     if (index < 0) return
     updateNode(source, { next: transitions.filter((_: any, position: number) => position !== index) })
     setContextMenu(null)
+  }
+  const transitionIndex = (id: string, source: string, target: string) =>
+    (workflow.nodes[source]?.next || []).findIndex((transition: any, position: number) => edgeId(source, transition.goto, position) === id && transition.goto === target)
+  const unpinEdge = (id: string, source: string, target: string) => {
+    const index = transitionIndex(id, source, target)
+    if (index < 0) return
+    updateNode(source, { next: workflow.nodes[source].next.map((transition: any, position: number) => {
+      if (position !== index) return transition
+      const { source_handle: _source, target_handle: _target, ...rest } = transition
+      return rest
+    }) })
+    setContextMenu(null)
+  }
+  const edgeIsPinned = (id: string, source: string, target: string) => {
+    const transition = workflow.nodes[source]?.next?.[transitionIndex(id, source, target)]
+    return !!(transition?.source_handle || transition?.target_handle)
   }
   const setNodeState = (id: string, state: 'normal' | 'initial' | 'final') => {
     setWorkflow(old => {
@@ -501,7 +492,7 @@ export default function App() {
 
       <main className="main-area">
         <div className="canvas-wrap">
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={setFlowInstance} onPaneClick={() => { setContextMenu(null); setSelectedNode(null) }} onPaneContextMenu={event => openContextMenu(event)} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={(_, node) => { setSelectedNode(node.id); setContextMenu(null) }} onNodeContextMenu={(event, node) => { setSelectedNode(node.id); openContextMenu(event, { kind: 'node', id: node.id }) }} onEdgeClick={() => setContextMenu(null)} onEdgeContextMenu={(event, edge) => openContextMenu(event, { kind: 'edge', id: edge.id, source: edge.source, target: edge.target })} onNodeDragStop={onMoveEnd} onConnect={onConnect} fitView fitViewOptions={{ padding: 0.23 }} minZoom={0.35} maxZoom={1.5} proOptions={{ hideAttribution: false }}><Background color="#d8e2ef" gap={22} size={1} /><Controls /></ReactFlow>
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={setFlowInstance} onPaneClick={() => { setContextMenu(null); setSelectedNode(null) }} onPaneContextMenu={event => openContextMenu(event)} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={(_, node) => { setSelectedNode(node.id); setContextMenu(null) }} onNodeContextMenu={(event, node) => { setSelectedNode(node.id); openContextMenu(event, { kind: 'node', id: node.id }) }} onEdgeClick={() => setContextMenu(null)} onEdgeContextMenu={(event, edge) => openContextMenu(event, { kind: 'edge', id: edge.id, source: edge.source, target: edge.target })} onNodeDragStop={onMoveEnd} onConnect={onConnect} connectionMode={ConnectionMode.Loose} fitView fitViewOptions={{ padding: 0.23 }} minZoom={0.35} maxZoom={1.5} proOptions={{ hideAttribution: false }}><Background color="#d8e2ef" gap={22} size={1} /><Controls /></ReactFlow>
           {contextMenu && <div className="canvas-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onContextMenu={event => event.preventDefault()}>
             <span className="context-menu-title">Add node</span>
             <div className="context-menu-grid">
@@ -513,9 +504,11 @@ export default function App() {
             </>}
             {contextMenu.target?.kind === 'edge' && <>
               <span className="context-menu-divider" />
+              {edgeIsPinned(contextMenu.target.id, contextMenu.target.source, contextMenu.target.target) && <button role="menuitem" onClick={() => contextMenu.target?.kind === 'edge' && unpinEdge(contextMenu.target.id, contextMenu.target.source, contextMenu.target.target)}><Magnet size={14} />Auto-place connection points</button>}
               <button className="danger" role="menuitem" onClick={() => contextMenu.target?.kind === 'edge' && removeEdge(contextMenu.target.id, contextMenu.target.source, contextMenu.target.target)}><Unplug size={14} />Delete connection</button>
             </>}
           </div>}
+          <div className="line-style-toggle" role="radiogroup" aria-label="Line style">{LINE_STYLES.map(({ value, label, icon: Icon }) => <button key={value} type="button" role="radio" aria-checked={lineStyle === value} aria-label={label} title={label} className={lineStyle === value ? 'active' : ''} onClick={() => setLineStyle(value)}><Icon size={14} /></button>)}</div>
           <div className="canvas-hint">Drag nodes to arrange · Connect handles to add transitions</div>
         </div>
 

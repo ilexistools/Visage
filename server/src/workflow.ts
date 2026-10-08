@@ -59,6 +59,9 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
     for (const transition of node.next ?? []) {
       if (typeof transition !== 'object' || transition === null || !Object.hasOwn(nodes, transition.goto)) fail(`Invalid transition target from ${id}`)
       if (transition.when !== undefined) expression(id, transition.when)
+      for (const key of ['source_handle', 'target_handle'] as const) {
+        if (transition[key] !== undefined && (typeof transition[key] !== 'string' || !/^(top|bottom|left|right)-\d+$/.test(transition[key]!))) fail(`Invalid ${key} on transition from ${id}: ${transition[key]}`)
+      }
     }
     if (!node.terminal && !node.next?.length) warnings.push(`Node ${id} has no transitions`)
   }
