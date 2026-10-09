@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-09
+
 ### Added
 
 - A "Reorganize layout" button next to the line styles arranges the canvas automatically: steps in ranks along the flow, without overlaps, with room for arc labels, in the orientation that fits the screen best, then fitted to view. Clicking again gives a different arrangement each time (order of branches, spacing, orientation when both fit), never with overlaps or more than one extra crossing. Undo restores the previous arrangement.
@@ -85,7 +87,8 @@ Initial Python version.
 - Added illustrative text labels to workflow arcs, separate from transition decision conditions.
 - Added an inline Markdown Skill editor and imports for binary or text resources into each Skill folder.
 
-[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ilexistools/Visage/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ilexistools/Visage/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ilexistools/Visage/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ilexistools/Visage/releases/tag/v0.3.0
