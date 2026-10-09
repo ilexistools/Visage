@@ -1,7 +1,8 @@
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import yaml from 'js-yaml'
 import { evaluationProblem, evaluationReadiness, matches, uncoveredResults, type Workflow, type WorkflowNode } from './engine.ts'
+import { skillGaps } from './skillQuality.ts'
 import { badRequest, checkedId, inside } from './store.ts'
 
 export function parseWorkflow(source: string): Workflow {
@@ -62,6 +63,10 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
       let skillPath = ''
       try { skillPath = inside(projectPath, skill!) } catch { fail(`Skill path escapes the project for ${id}: ${skill}`) }
       if (!existsSync(skillPath) || !statSync(skillPath).isFile()) readiness.push(`Skill not found for ${id}: ${skill}`)
+      else if (statSync(skillPath).size <= 2_000_000) {
+        const gaps = skillGaps(readFileSync(skillPath, 'utf8'), node)
+        if (gaps.length) warnings.push(`Node ${id}: shallow Skill (${skill}): ${gaps.join('; ')}`)
+      }
     }
     validateEvaluation(id, node, nodes)
     validatePostcondition(id, node)

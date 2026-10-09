@@ -9,7 +9,7 @@
  * A seed gives a variation instead: a different order inside ranks, side for the branches,
  * spacing and possibly orientation, with the same guarantees (no overlaps, room for labels).
  */
-import { NODE_HEIGHT, NODE_WIDTH } from './edgeLayout'
+import { NODE_HEIGHT, NODE_WIDTH } from './edgeLayout.ts'
 
 type Point = { x: number; y: number }
 type LayoutNode = { position?: Point; terminal?: boolean; next?: { goto: string }[] }

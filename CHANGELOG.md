@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Validation warns about a shallow Skill: fewer than 150 words, no numbered procedure, no quality criteria or definition of done, no JSON example, the placeholder text, or an evaluated step whose Skill never names `result` or one of its outcomes. The warning comes back in the `upsert_node` reply, so agents building a workflow complete the Skill before moving on; it does not block export.
+- The authoring guide explains what a Skill contains (goal, inputs, procedure, quality criteria, decision, failure handling, output), with a full example, its shallow counterpart and a checklist to run before writing the next Skill. The harness Skill and MCP instructions point agents to it.
+
+### Fixed
+
+- `npm run typecheck` failed on an import without extension in the layout code.
+
 ## [0.5.0] - 2026-10-09
 
 ### Added

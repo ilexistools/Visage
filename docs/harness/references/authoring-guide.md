@@ -23,23 +23,96 @@ Prefer `predicate` or `choice` when the outcomes are discrete; a `score` invites
 
 ## 3. Write each step's Skill
 
-The exported runner gives the agent, for every step: the step's Skill (`step_file`), the run `input`, the outputs of earlier steps (`previous_outputs.<step>`), the step's reference files (`resources_dir`) and a folder for files it produces (`artifact_dir`). Write the Skill as instructions for an agent that sees nothing else:
+The exported runner gives the agent, for every step: the step's Skill (`step_file`), the run `input`, the outputs of earlier steps (`previous_outputs.<step>`), the step's reference files (`resources_dir`), any shared contract files (`shared_files`) and a folder for files it produces (`artifact_dir`). The agent sees nothing else: not the conversation in which the workflow was designed, not the other steps' Skills, not what the user meant.
 
-```markdown
+**A Skill is a procedure, not a prompt.** "Review the draft and decide if it is ready" is a prompt: every agent will review differently, stop at a different depth and decide on a different bar. A Skill says how the work is done, what good looks like and how to prove it. Write it the way you would brief a capable colleague who has never seen the project and cannot ask you questions.
+
+### What a Skill contains
+
+| Section | What it says |
+| --- | --- |
+| **Goal** | What this step delivers and why: what came before it and what the next step needs from it. |
+| **Inputs** | The exact keys and files to read: `input.topic`, `previous_outputs.draft.draft_file`, `DESIGN.md` in the artifact folder, the shared contract. What to do when one is missing or ambiguous. |
+| **Procedure** | Numbered steps with the concrete method of each: what to open, what to compare with what, what to run. Each step should be something an agent can do and know it has done. |
+| **Quality criteria** | A definition of done that can be checked item by item, ideally with thresholds (word counts, test results, required sections). |
+| **Decision** (evaluated steps) | When each result applies, in the words of the `question` and `options`, including borderline cases. For scores, what 0.2, 0.5 and 0.8 mean. |
+| **Failure handling** | What to do when inputs are missing, the method cannot run, or the evidence is incomplete. Never invent data to fill a gap: report it in the output. |
+| **Output** | The files to write (name and folder) and the JSON object to return, with every key later steps read. |
+
+Domain knowledge that does not fit in a procedure (style guides, checklists, templates, good and bad examples) goes in reference files next to the `SKILL.md` (`write_file`), and the Skill names them in the step where they are used.
+
+### Example
+
+````markdown
 # Review the draft
 
-Read the draft file named in `previous_outputs.draft.draft_file` and the brief in `input.topic`.
-Check it against `checklist.md` in this step's folder: accuracy, structure, tone, length (800-1200 words).
+## Goal
 
-- If every item passes, the result is `approved`.
-- If fixable problems remain, the result is `changes`; list each one in `issues` so the draft step can fix it.
-- If the draft does not answer the brief at all, the result is `rejected`.
+Decide whether the blog post draft is ready to publish. The draft step wrote it from the brief;
+if it is not ready, the draft step gets it back with your list of issues, so every issue must be
+specific enough to fix without asking you anything.
 
-Write the review to `review.md` in the artifact folder.
-Finish with one JSON object: {"result": "approved" | "changes" | "rejected", "reason": "...", "issues": ["..."], "review_file": "review.md"}
+## Inputs
+
+- `input.topic`: the brief the post must answer.
+- `previous_outputs.draft.draft_file`: the draft, a Markdown file in the artifact folder.
+- `previous_outputs.review.issues`, if present: the issues you raised last time. Check each one again.
+- `checklist.md` in this step's folder: the editorial checklist.
+
+If the draft file is missing or empty, do not review anything: return `rejected` with the reason
+"draft file missing".
+
+## Procedure
+
+1. Read the brief, then the whole draft once without judging, to understand what it tries to say.
+2. Go through `checklist.md` item by item. For each item, note pass or fail and quote the passage
+   that shows it (a heading, a sentence, a number).
+3. Check every factual claim that names a product, version, date or number against the sources the
+   draft cites. A claim without a source counts as an issue.
+4. Count the words of the body (without code blocks). The target is 800 to 1200 words.
+5. If there were earlier issues, confirm each one is fixed; an issue that comes back is listed again.
+6. Write `review.md` in the artifact folder: one line per checklist item with its verdict and
+   evidence, then the list of issues, most important first.
+
+## Quality criteria
+
+The review is done when:
+
+- every checklist item has a verdict and a quoted piece of evidence;
+- every issue names where it is (section or quote), what is wrong and what a fix looks like;
+- the decision below follows from the verdicts, not from an overall impression.
+
+## Decision
+
+- `approved`: every checklist item passes and no factual claim is unsupported.
+- `changes`: the draft answers the brief, but one or more items fail and each can be fixed by
+  editing. List every one in `issues`.
+- `rejected`: the draft does not answer the brief (wrong topic, wrong audience), or it is missing.
+  Say why in `reason`; rewriting is cheaper than fixing.
+
+When in doubt between `approved` and `changes`, choose `changes`: an unnecessary revision costs
+less than publishing a mistake.
+
+## Output
+
+Write `review.md` in the artifact folder, then finish with one JSON object:
+
+```json
+{"result": "changes", "reason": "Two claims lack sources and the conclusion is missing.", "issues": ["Section 2: the 40% figure has no source; cite the survey or remove it.", "No conclusion: add a closing section that answers the brief's question."], "review_file": "review.md"}
+```
+````
+
+The same step written as a prompt, which validation reports as a shallow Skill:
+
+```markdown
+# Review
+
+Review the draft and check that it is good. Return approved, changes or rejected.
 ```
 
-Guidelines:
+It names no input, no method, no bar and no output, so each run invents its own.
+
+### Guidelines
 
 - **Inputs**: name the exact keys to read (`input.topic`, `previous_outputs.review.issues`). Keys of earlier outputs are whatever those steps returned, so keep them consistent across Skills.
 - **Decision**: for evaluated steps, describe when each result applies, using the same words as the `question` and the `options`.
@@ -47,6 +120,18 @@ Guidelines:
 - **Files**: say where files go. Reference files the step needs (guidelines, templates, examples) go next to its `SKILL.md` with `write_file`, and the Skill names them.
 - **Self-contained**: do not mention Visage, the runner or other steps' instructions; the orchestrator Skill handles the protocol.
 - **One place for files**: steps write files to the artifact folder and later steps read them from there (`the design in DESIGN.md in the artifact folder`). Do not mix the artifact folder with the project root or the working directory: a file one step writes in one place is missing for a step that reads the other.
+- **Language**: write the Skill in the language the user works in; the checks below understand section names in English, Portuguese and Spanish.
+
+### Check each Skill before the next
+
+Write one Skill at a time, then reread it as the agent that will run it, knowing nothing else:
+
+1. Could I do this step from this file alone, and would two runs do it the same way?
+2. Do I know exactly when I am done, and how good is good enough?
+3. For an evaluated step: is every result reachable by a rule, not by mood?
+4. Is every file and key I read produced by an earlier step, under the same name?
+
+`upsert_node` and `validate_project` warn about a **shallow Skill**: under 150 words, no numbered procedure, no quality-criteria section, no JSON example, or an evaluated step whose Skill never names `result` or one of its outcomes. Treat that warning like a failing test.
 
 ### Shared contract
 
@@ -101,7 +186,7 @@ draft → grade (score) ─ ≥ 0.8 → publish
 
 1. `validate_project` returns `ready: true` and no warnings, or only warnings the user accepted.
 2. `export_diagram` shows the flow you intended; share it with the user when the design is not trivial.
-3. Every step has real instructions: a step created without `skill_markdown` has no Skill file (`Skill not found` blocks export), and Skills created from the editor or opened before being written contain only a placeholder line.
+3. Every step has real instructions: a step created without `skill_markdown` has no Skill file (`Skill not found` blocks export), Skills created from the editor or opened before being written contain only a placeholder line, and no step has a `shallow Skill` warning.
 4. The workflow `description` says when to use it, so harnesses pick the exported Skill for the right requests.
 5. Names shared between steps live in one [shared contract](#shared-contract), and success states that deliver a product have a postcondition.
 6. Remember what `test_workflow` proves: the workflow **routes** as designed. Only a postcondition, or a verification step that runs the real artifact, says whether the product works.

@@ -182,6 +182,7 @@ Saving checks structure; exporting also requires the workflow to be complete.
 - `Node <id> is unreachable`: nothing leads to it from the start.
 - `Node <id>: "<when>" refers to unknown step "<step>", so it is always null`: a misspelled step in `state.attempts.<step>`, `state.outputs.<step>` or `state.feedback.<step>`. The arc would never match (or always, with `!=`).
 - `Node <id>: "<when>" uses unknown state key "<key>"`: `state.` is followed by `input`, `outputs`, `attempts`, `feedback` or `last_output`.
+- `Node <id>: shallow Skill (<path>): <gaps>`: the Skill reads like a prompt. Gaps: fewer than 150 words, no numbered procedure, no section with quality criteria or a definition of done (a heading or bold label such as *Quality criteria*, *Definition of done*, *Critérios*), no JSON example, the placeholder text, or, for evaluated steps, a Skill that never names `result`, one of the choice options, `true`/`false`, or what scores mean. See [authoring-guide.md](authoring-guide.md#3-write-each-steps-skill).
 - `Node <id>: unknown keys <keys>`: a misspelled field, or text cut at a comma inside `{...}`; quote text that contains commas.
 - `Node <id>: output_schema is no longer used ...` / `checks is no longer used ...`: old format; set an evaluation instead.
 

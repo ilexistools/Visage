@@ -13,12 +13,16 @@ export const INSTRUCTIONS = `Visage designs state-machine workflows of agent Ski
 A project is a folder with workflow.yaml and one skills/<step>/SKILL.md per step. Changes are saved at once and appear in the visual editor (open_editor).
 
 Procedure: list_projects (reuse an existing project) → create_project → configure_workflow (description = when to use the exported Skill)
-→ upsert_node for each step with label, description and skill_markdown (complete instructions; the first step created is the start)
+→ upsert_node for each step with label, description and skill_markdown (the first step created is the start)
 → evaluation on steps whose result picks the next step → upsert_node terminal=true for each end state
 → set_transitions for every step → validate_project (fix errors and warnings) → export_plugin. export_diagram returns a Mermaid diagram.
 
 Evaluation: the step returns {"result": ..., "reason": "..."}; evaluation.type is predicate (true/false), choice (one of options) or score (0 to 1),
 with a question saying what to decide. Steps that only produce files need none. An invalid result is tried again with feedback, up to max_attempts tries in total (default 1 = no retry), then goes to on_fail or fails the run.
+
+Skills are procedures, not prompts: the agent running a step sees only its Skill, the run input and earlier outputs. Each skill_markdown needs
+a goal, inputs (exact keys and files), a numbered procedure with concrete methods, quality criteria (definition of done), decision rules for
+every result of an evaluated step, failure handling and the JSON it returns. Write one Skill at a time; fix any "shallow Skill" warning.
 
 Arcs: set_transitions replaces all arcs of a step; the first arc whose when matches is taken; omit when on the last arc for "otherwise" (an empty when is rejected).
 Route with output.result == true / == false (predicate), output.result == "option" (choice), output.result >= 0.8 (score; also >, <, <=).
@@ -80,7 +84,8 @@ export function createMcpServer(context: Context): McpServer {
     },
     ({ project_id, ...settings }) => projects.configureWorkflow(project_id, settings))
   tool('upsert_node', `Create or update a Skill node. Only given fields change.
-skill_markdown writes the node's SKILL.md (default path skills/<node_id>/SKILL.md).
+skill_markdown writes the node's SKILL.md (default path skills/<node_id>/SKILL.md): a full procedure with goal, inputs, numbered
+steps, quality criteria, decision rules and output JSON; the reply warns when it is shallow.
 evaluation is {type: predicate|choice|score, question?, options? (choice only)}; pass null to remove it. max_attempts and on_fail
 apply when the result is invalid; on_fail: "" clears it. postcondition (final nodes only) is a shell command the exported runner runs
 when the run arrives there; the run fails unless it exits 0; pass null to remove it. The first node created becomes the start node.`,

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
+import { PLACEHOLDER_SKILL } from './skillQuality.ts'
 import type { Evaluation, Postcondition, Transition, Workflow, WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, defaultProjectsDir, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
 import { dumpWorkflow, parseWorkflow, validateWorkflow } from './workflow.ts'
@@ -263,7 +264,7 @@ export function readFile(id: string, path: string): string {
   if (!existsSync(target)) {
     const referenced = Object.values(load(id).nodes).some(node => node?.skill?.path === path)
     if (!referenced || !path.endsWith('SKILL.md') || !path.startsWith('skills/')) throw notFound(`File not found: ${path}`)
-    writeText(target, '# Step\n\nAdd instructions for this step.\n')
+    writeText(target, PLACEHOLDER_SKILL)
   }
   if (!statSync(target).isFile() || statSync(target).size > 2_000_000) throw badRequest('Invalid project file')
   return readFileSync(target, 'utf8')

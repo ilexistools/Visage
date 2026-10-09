@@ -76,7 +76,7 @@ Creates the node when `node_id` is new, otherwise changes only the fields you pa
 | `project_id`, `node_id` | string, required | |
 | `label` | string | Name shown on the canvas. Defaults to `node_id` on creation. |
 | `description` | string | One line shown under the label and in the exported steps table. |
-| `skill_markdown` | string | Full instructions for the step; written to the node's Skill file after the workflow change is validated. |
+| `skill_markdown` | string | Full instructions for the step; written to the node's Skill file after the workflow change is validated. The reply then carries the validation warnings, including `shallow Skill` when the text lacks a procedure, quality criteria, the output JSON or the step's outcomes; see [authoring-guide.md](authoring-guide.md#3-write-each-steps-skill). |
 | `skill_path` | string | Skill file, must end in `SKILL.md` and stay in the project. Default `skills/<node_id>/SKILL.md`. |
 | `terminal` | boolean | `true` makes it a final state and deletes its arcs and evaluation (its Skill file is kept but unused). `false` turns it back into a step; set its arcs and evaluation again. |
 | `evaluation` | object or `null` | `{ "type": "predicate" \| "choice" \| "score", "question": "...", "options": ["..."] }`; `options` only for `choice`. `null` removes the evaluation. |
