@@ -95,7 +95,6 @@ export function simulate(workflow: Workflow, scenario: Scenario): ScenarioResult
       break
     }
     const output = visit < list.length ? asOutput(list[visit]) : {}
-    state.attempts[current] = visit + 1
     path.push(current)
     const decision = decide(workflow, state, current, output)
     steps.push({ node: current, output, decision: decision.status, errors: decision.errors, ...(decision.next_node ? { next_node: decision.next_node } : {}) })

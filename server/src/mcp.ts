@@ -24,6 +24,11 @@ Arcs: set_transitions replaces all arcs of a step; the first arc whose when matc
 Route with output.result == true / == false (predicate), output.result == "option" (choice), output.result >= 0.8 (score; also >, <, <=).
 when is <path> <op> <literal>: path starts with output. or state. (state.input, state.outputs.<step>.<key>, state.attempts.<step>);
 ops ==, !=, <, <=, >, >=, in, not in. A warning "no arc for result X" means that result would fail the run.
+state.attempts.<step> counts every submission of a step; max_attempts counts only consecutive invalid results, and a valid one resets it.
+
+Steps share files through the run's artifact_dir. Put names every step must agree on (files, paths, test hooks) in one project file and list it in
+configure_workflow shared_references; every step receives it. A final node may have a postcondition {command, message?, timeout_seconds?}:
+the exported runner runs it when the run arrives there and reports failed unless it exits 0. Use it on success states to check the product, not the workflow.
 
 write_file refuses workflow.yaml and project.json; use the workflow tools. delete_project needs confirm=true and is permanent.`
 
@@ -68,13 +73,17 @@ export function createMcpServer(context: Context): McpServer {
   tool('get_workflow', 'Return the workflow YAML source, the parsed workflow and validation warnings.', { project_id: z.string() }, ({ project_id }) => projects.getWorkflow(project_id))
   tool('put_workflow', 'Replace the whole workflow with YAML source. Structural errors are rejected; readiness issues come back as warnings.',
     { project_id: z.string(), source: z.string() }, ({ project_id, source }) => projects.putWorkflow(project_id, source))
-  tool('configure_workflow', 'Change workflow-level settings: display name, description (used as the exported Skill description), version and max_steps.',
-    { project_id: z.string(), name: z.string().optional(), description: z.string().optional(), version: z.string().optional(), max_steps: z.number().int().optional() },
+  tool('configure_workflow', 'Change workflow-level settings: display name, description (used as the exported Skill description), version, max_steps and shared_references (project files every step receives; [] clears them).',
+    {
+      project_id: z.string(), name: z.string().optional(), description: z.string().optional(), version: z.string().optional(), max_steps: z.number().int().optional(),
+      shared_references: z.array(z.string()).optional().describe('Project file paths, e.g. ["references/CONTRACT.md"]'),
+    },
     ({ project_id, ...settings }) => projects.configureWorkflow(project_id, settings))
   tool('upsert_node', `Create or update a Skill node. Only given fields change.
 skill_markdown writes the node's SKILL.md (default path skills/<node_id>/SKILL.md).
 evaluation is {type: predicate|choice|score, question?, options? (choice only)}; pass null to remove it. max_attempts and on_fail
-apply when the result is invalid; on_fail: "" clears it. The first node created becomes the start node.`,
+apply when the result is invalid; on_fail: "" clears it. postcondition (final nodes only) is a shell command the exported runner runs
+when the run arrives there; the run fails unless it exits 0; pass null to remove it. The first node created becomes the start node.`,
     {
       project_id: z.string(), node_id: z.string(), label: z.string().optional(), description: z.string().optional(),
       skill_markdown: z.string().optional(), skill_path: z.string().optional(), terminal: z.boolean().optional(),
@@ -84,6 +93,11 @@ apply when the result is invalid; on_fail: "" clears it. The first node created 
         options: z.array(z.string()).optional().describe('Choice only: the possible results'),
       }).nullable().optional(),
       max_attempts: z.number().int().min(1).max(20).optional(), on_fail: z.string().optional(),
+      postcondition: z.object({
+        command: z.string().describe('Shell command run from the working directory; VISAGE_ARTIFACT_DIR, VISAGE_RUN_DIR and VISAGE_RUN_ID are set'),
+        message: z.string().optional().describe('What the command proves, shown when it fails'),
+        timeout_seconds: z.number().int().min(1).max(3600).optional(),
+      }).nullable().optional(),
       position: z.object({ x: z.number(), y: z.number() }).optional(),
     },
     ({ project_id, node_id, ...input }) => projects.upsertNode(project_id, node_id, input))

@@ -11,10 +11,10 @@ import { validateWorkflow } from './workflow.ts'
 
 const MARKER = '.visage-export'
 const SKIP_DIRS = new Set(['runs', 'dist', '.visage', 'node_modules', '__pycache__', '.git'])
-const PORTABLE_KEYS = ['label', 'description', 'terminal', 'next', 'evaluation', 'max_attempts', 'on_fail'] as const
+const PORTABLE_KEYS = ['label', 'description', 'terminal', 'next', 'evaluation', 'max_attempts', 'on_fail', 'postcondition'] as const
 
 type PortableNode = Pick<WorkflowNode, typeof PORTABLE_KEYS[number]> & { step?: string }
-type Portable = { plugin: string; workflow: NonNullable<Workflow['workflow']>; start: string; max_steps: number; nodes: Record<string, PortableNode> }
+type Portable = { plugin: string; workflow: NonNullable<Workflow['workflow']>; start: string; max_steps: number; shared_references?: string[]; nodes: Record<string, PortableNode> }
 
 export const slug = (value: string) => value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'workflow'
 
@@ -51,8 +51,12 @@ function portableWorkflow(workflow: Workflow, name: string): Portable {
     if (!node.terminal) keep.step = `nodes/${id}/STEP.md`
     nodes[id] = keep
   }
-  return { plugin: name, workflow: workflow.workflow ?? {}, start: workflow.start, max_steps: workflow.max_steps ?? DEFAULT_MAX_STEPS, nodes }
+  const shared = (workflow.shared_references ?? []).map(sharedPath)
+  return { plugin: name, workflow: workflow.workflow ?? {}, start: workflow.start, max_steps: workflow.max_steps ?? DEFAULT_MAX_STEPS, ...(shared.length ? { shared_references: shared } : {}), nodes }
 }
+
+/** Where a shared reference lives inside the exported Skill. */
+const sharedPath = (path: string) => `shared/${path.replace(/\\/g, '/').replace(/^(\.\/)+/, '')}`
 
 /** Nodes in breadth-first order from the start node, then any unreachable ones. */
 function ordered(portable: Portable): string[] {
@@ -83,7 +87,7 @@ function orchestrator(portable: Portable, description: string): string {
       evaluation?.type === 'choice' ? `choice: ${(evaluation.options ?? []).join(' / ')}` : evaluation?.type === 'score' ? 'score 0–1' : evaluation?.type ?? '',
       evaluation && (node.max_attempts ?? 1) > 1 ? `up to ${node.max_attempts} attempts` : '',
     ].filter(Boolean).join(', ') || '—'
-    const next = node.terminal ? '—' : [
+    const next = node.terminal ? (node.postcondition ? `postcondition: ${code(node.postcondition.command)}` : '—') : [
       ...(node.next ?? []).map(t => `\`${t.goto}\`${t.when ? ` when ${code(t.when)}` : ''}`),
       ...(node.on_fail ? [`\`${node.on_fail}\` if evaluation fails`] : []),
     ].join('; ') || '—'
@@ -105,13 +109,13 @@ All commands below use \`scripts/flow.mjs\`, located in the same folder as this 
    \`node <this-skill-folder>/scripts/flow.mjs start --input '<JSON or text with the user request>'\`
    (use \`--input-file path.json\` for large inputs; if the user names the run, add \`--run <name>\` using letters, digits, \`-\` and \`_\`).
 2. The runner prints JSON with \`status: "awaiting_output"\` and the current step: \`node\`, \`step_file\`, \`resources_dir\`, \`input\`, \`previous_outputs\`, \`feedback\`, \`output_contract\`, \`artifact_dir\`, \`output_file\` and the exact \`submit\` command.
-3. **Execute the step**: read \`step_file\` and follow it exactly, using \`input\` and \`previous_outputs\` as context and files in \`resources_dir\` as references. Save any files you produce in \`artifact_dir\`.
+3. **Execute the step**: read \`step_file\` and follow it exactly, using \`input\` and \`previous_outputs\` as context and files in \`resources_dir\` as references. When the reply lists \`shared_files\`, read them too: they fix the names, paths and interfaces every step must use, and they win over anything a step invents. Save any files you produce in \`artifact_dir\`; later steps find them there.
 4. **Submit**: write one JSON object to \`output_file\` and run the \`submit\` command exactly as printed. When \`output_contract\` is present, the object must contain \`result\` answering its \`question\` (\`true\`/\`false\` for a predicate, exactly one of \`options\` for a choice, a number from 0 to 1 for a score) and a short \`reason\`. Files you produce go in \`artifact_dir\`; the runner uses only \`result\` to choose the next step.
 5. Read the runner's reply:
    - \`decision: "next"\` with \`status: "awaiting_output"\` → go to step 3 for the new \`node\`.
    - \`decision: "retry"\` → the output was rejected; fix every item in \`errors\`/\`feedback\` and resubmit the same step.
-   - \`status: "completed"\` → report the final result to the user from \`outputs\` and \`artifact_dir\`.
-   - \`status: "failed"\` → stop and report \`error\` to the user.
+   - \`status: "completed"\` → report to the user what the run produced: \`final_output\` (the last step's result and reason), the files in \`artifact_dir\` and, when present, the \`postcondition\` that was checked. \`final_state\` only names the end state; never present it as proof that the work is good.
+   - \`status: "failed"\` → stop and report \`error\` to the user (with \`postcondition.output\` when a postcondition failed).
 6. If you lose track of the run, \`node <this-skill-folder>/scripts/flow.mjs next\` prints the current step again; \`status\` shows progress.
 
 Keep going until the run is \`completed\` or \`failed\`. Ask the user only when a step's instructions require information that is not available.
@@ -165,6 +169,11 @@ export function exportPlugin(projectId: string, outputDir?: string | null, makeZ
   writeFileSync(join(root, MARKER), 'Generated by Visage. This folder is replaced on every export.\n')
 
   const portable = portableWorkflow(workflow, name)
+  for (const path of workflow.shared_references ?? []) {
+    const target = join(skill, sharedPath(path))
+    mkdirSync(dirname(target), { recursive: true })
+    cpSync(join(root_path, path), target, { dereference: true })
+  }
   for (const [id, node] of Object.entries(workflow.nodes)) {
     if (!node.terminal) copyStep(join(root_path, node.skill!.path!), root_path, join(skill, 'nodes', id))
   }

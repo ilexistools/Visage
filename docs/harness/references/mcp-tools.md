@@ -66,6 +66,7 @@ Warnings never block saving. Structural problems (an arc to a missing node, an i
 | `description` | string | Becomes the exported Skill's description, which harnesses use to decide when to run it. Say what the workflow does and when to use it. |
 | `version` | string | Plugin version, e.g. `1.2.0`. |
 | `max_steps` | integer 1–10000 | Maximum submissions per run (default 50) to stop endless loops. Retries count. |
+| `shared_references` | list of strings | Project files every step receives, e.g. `["references/CONTRACT.md"]`; see [authoring-guide.md](authoring-guide.md#shared-contract). `[]` removes them. A missing file blocks export. |
 
 ### `upsert_node`
 Creates the node when `node_id` is new, otherwise changes only the fields you pass.
@@ -79,8 +80,9 @@ Creates the node when `node_id` is new, otherwise changes only the fields you pa
 | `skill_path` | string | Skill file, must end in `SKILL.md` and stay in the project. Default `skills/<node_id>/SKILL.md`. |
 | `terminal` | boolean | `true` makes it a final state and deletes its arcs and evaluation (its Skill file is kept but unused). `false` turns it back into a step; set its arcs and evaluation again. |
 | `evaluation` | object or `null` | `{ "type": "predicate" \| "choice" \| "score", "question": "...", "options": ["..."] }`; `options` only for `choice`. `null` removes the evaluation. |
-| `max_attempts` | integer 1–20 | Total tries per visit when the result is invalid, each retry with feedback. Default 1 (no retry). |
+| `max_attempts` | integer 1–20 | Consecutive invalid results allowed, each retry with feedback; a valid result resets the count. Default 1 (no retry). |
 | `on_fail` | string | Node to go to after the last invalid attempt; `""` clears it (the run then stops). |
+| `postcondition` | object or `null` | Final states only: `{ "command": "...", "message": "...", "timeout_seconds": 300 }`. The exported runner runs the command when the run arrives there and fails the run unless it exits 0; see [workflow-format.md](workflow-format.md#postconditions). `null` removes it; `terminal: false` also removes it. |
 | `position` | `{x, y}` | Canvas position. New steps are placed in a row; the editor places nodes without a position. |
 
 The first step created becomes the start node (a final state never does). Returns `{ "node_id": "...", "created": true|false, "workflow": {...}, "warnings": [...] }`.

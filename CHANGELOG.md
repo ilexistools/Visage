@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Postconditions: a final state can declare `postcondition: {command, message?, timeout_seconds?}`. The exported runner runs it on arrival and reports the run as `failed` unless it exits 0, so a good score no longer completes a run whose product is broken. The result is in the reply and in `history.jsonl`, and the Inspector edits it for final states.
+- `shared_references`: project files every step receives as `shared_files`, for the names, paths and interfaces steps must agree on. They are exported under `shared/`, and postconditions find them through `VISAGE_SHARED_DIR`.
+- Completed runs report `final_step` and `final_output` (the last step's result and reason), not only the final state's fixed description.
+- Validation warns when a `when` names an unknown step (`state.attempts.fixx`) or state key, which made the arc silently never match.
+- `Workflow exceeded max_steps` lists the submissions per step.
+- Authoring guide sections on a shared contract between steps and on verifying a runtime artifact with only Node.js and the shell.
+
+### Changed
+
+- `state.attempts` is counted by the engine (`decide`) instead of by each caller.
+- The documentation states that `max_attempts` counts consecutive invalid results, that a valid result resets the count and that `on_fail` never catches a valid result.
+
 ## [0.3.1] - 2026-10-08
 
 ### Added

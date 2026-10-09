@@ -371,7 +371,7 @@ export default function App() {
       const node = { ...old.nodes[id], terminal: state === 'final' }
       // A final state ends the run: it has no arcs, evaluation or failure route.
       if (state === 'final') { delete node.next; delete node.evaluation; delete node.on_fail; delete node.max_attempts }
-      else node.next ??= []
+      else { node.next ??= []; delete node.postcondition }
       const nextNodes = { ...old.nodes, [id]: node }
       let start = old.start
       if (state === 'initial') start = id
@@ -653,6 +653,7 @@ export default function App() {
               </li>
             })}</ul>}
           </div>
+          {selected.terminal && <div className="field"><label>Postcondition</label><input value={selected.postcondition?.command || ''} onChange={e => updateNode(selectedNode!, { postcondition: e.target.value ? { ...selected.postcondition, command: e.target.value } : undefined })} placeholder="node tests/smoke.mjs" aria-label="Postcondition command" /><p className="helper">Shell command the exported runner runs when the run arrives here; the run fails unless it exits 0.</p></div>}
           {!selected.terminal && <EvaluationEditor key={selectedNode} node={selected} nodeId={selectedNode!} nodes={workflow.nodes} onChange={patch => updateNode(selectedNode!, patch)} />}
           {!selected.terminal && <div className="field"><label>Next steps</label><ArcConditions node={selected} nodes={workflow.nodes} onChange={next => updateNode(selectedNode!, { next })} /></div>}
         </div>

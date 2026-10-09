@@ -1,4 +1,5 @@
 import { existsSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import yaml from 'js-yaml'
 import { evaluationProblem, evaluationReadiness, matches, uncoveredResults, type Workflow, type WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, inside } from './store.ts'
@@ -20,7 +21,9 @@ export const dumpWorkflow = (workflow: Workflow) => yaml.dump(workflow, { noRefs
 const fail = (message: string): never => { throw badRequest(message) }
 
 // output_schema and checks have their own warning.
-const NODE_KEYS = new Set(['type', 'label', 'description', 'skill', 'terminal', 'evaluation', 'max_attempts', 'on_fail', 'next', 'position', 'output_schema', 'checks'])
+const NODE_KEYS = new Set(['type', 'label', 'description', 'skill', 'terminal', 'evaluation', 'max_attempts', 'on_fail', 'next', 'position', 'output_schema', 'checks', 'postcondition'])
+// Keys of `state.` in transition expressions (see contextFor in engine.ts).
+const STATE_KEYS = new Set(['input', 'outputs', 'attempts', 'feedback', 'last_output'])
 
 /**
  * Validate a workflow document.
@@ -35,13 +38,14 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
   const maxSteps = workflow.max_steps
   if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 10_000)) fail('max_steps must be an integer between 1 and 10000')
   workflow.start ??= ''
+  const readiness: string[] = []
+  sharedReferences(workflow, projectPath, readiness)
   const ids = Object.keys(nodes)
   if (!ids.length) {
     if (workflow.start) fail('An empty workflow cannot have a start node')
     if (strict) fail('Add a starting node and a final state before exporting this workflow')
-    return { workflow, warnings: [] }
+    return { workflow, warnings: readiness }
   }
-  const readiness: string[] = []
   const warnings: string[] = []
   if (typeof workflow.start !== 'string') fail('start must be a node ID')
   if (!Object.hasOwn(nodes, workflow.start)) readiness.push('Start node must exist')
@@ -60,12 +64,17 @@ export function validateWorkflow(source: string, projectPath: string, strict = f
       if (!existsSync(skillPath) || !statSync(skillPath).isFile()) readiness.push(`Skill not found for ${id}: ${skill}`)
     }
     validateEvaluation(id, node, nodes)
+    validatePostcondition(id, node)
     const unfinished = node.evaluation && evaluationReadiness(node.evaluation)
     if (unfinished) readiness.push(`Node ${id}: ${unfinished}`)
     if (node.next !== undefined && !Array.isArray(node.next)) fail(`Transitions of ${id} must be a list`)
     for (const transition of node.next ?? []) {
       if (typeof transition !== 'object' || transition === null || typeof transition.goto !== 'string' || !Object.hasOwn(nodes, transition.goto)) fail(`Invalid transition target from ${id}`)
-      if (transition.when !== undefined) expression(id, transition.when)
+      if (transition.when !== undefined) {
+        expression(id, transition.when)
+        const problem = statePathProblem(transition.when, nodes)
+        if (problem) warnings.push(`Node ${id}: ${problem}`)
+      }
       for (const key of ['source_handle', 'target_handle'] as const) {
         if (transition[key] !== undefined && (typeof transition[key] !== 'string' || !/^(top|bottom|left|right)-\d+$/.test(transition[key]!))) fail(`Invalid ${key} on transition from ${id}: ${transition[key]}`)
       }
@@ -102,6 +111,49 @@ function expression(nodeId: string, value: unknown): void {
     matches(value, { output: {}, state: {} })
   } catch (error) {
     fail(`Node ${nodeId}: ${(error as Error).message}`)
+  }
+}
+
+/**
+ * A misspelled step in `state.attempts.<step>` or `state.outputs.<step>` resolves to null,
+ * so the arc silently never (or always) matches. Name the mistake instead.
+ */
+function statePathProblem(when: string, nodes: Record<string, WorkflowNode>): string | null {
+  const path = /^\s*state((?:\.[A-Za-z0-9_-]+)*)/.exec(when)?.[1]?.split('.').slice(1)
+  if (!path) return null
+  if (!path.length) return `"${when}" compares the whole state; name a key such as state.input`
+  if (!STATE_KEYS.has(path[0])) return `"${when}" uses unknown state key "${path[0]}" (use ${[...STATE_KEYS].join(', ')})`
+  if ((path[0] === 'attempts' || path[0] === 'outputs' || path[0] === 'feedback') && path[1] !== undefined && !Object.hasOwn(nodes, path[1])) {
+    return `"${when}" refers to unknown step "${path[1]}", so it is always null`
+  }
+  return null
+}
+
+function validatePostcondition(id: string, node: WorkflowNode): void {
+  const postcondition = node.postcondition
+  if (postcondition === undefined) return
+  if (!node.terminal) fail(`Node ${id}: only final nodes can have a postcondition`)
+  if (typeof postcondition !== 'object' || postcondition === null || Array.isArray(postcondition)) fail(`Node ${id}: postcondition must be a map with a command`)
+  const unknown = Object.keys(postcondition).filter(key => !['command', 'message', 'timeout_seconds'].includes(key))
+  if (unknown.length) fail(`Node ${id}: postcondition has unknown keys: ${unknown.join(', ')}`)
+  if (typeof postcondition.command !== 'string' || !postcondition.command.trim()) fail(`Node ${id}: postcondition command must be non-empty text`)
+  if (postcondition.message !== undefined && typeof postcondition.message !== 'string') fail(`Node ${id}: postcondition message must be text`)
+  const timeout = postcondition.timeout_seconds
+  if (timeout !== undefined && (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600)) fail(`Node ${id}: postcondition timeout_seconds must be an integer between 1 and 3600`)
+}
+
+/** Shared references are project files; a missing one only blocks export. */
+function sharedReferences(workflow: Workflow, projectPath: string, readiness: string[]): void {
+  const shared = workflow.shared_references
+  if (shared === undefined) return
+  if (!Array.isArray(shared) || shared.some(path => typeof path !== 'string' || !path.trim())) fail('shared_references must be a list of project file paths')
+  if (new Set(shared).size !== shared.length) fail('shared_references must not repeat a file')
+  for (const path of shared) {
+    // Exports keep the relative path under shared/, so it must stay a plain path below the project.
+    if (isAbsolute(path) || path.split(/[\\/]/).includes('..')) fail(`Shared reference must be a relative path inside the project: ${path}`)
+    let file = ''
+    try { file = inside(projectPath, path) } catch { fail(`Shared reference escapes the project: ${path}`) }
+    if (!existsSync(file) || !statSync(file).isFile()) readiness.push(`Shared reference not found: ${path}`)
   }
 }
 

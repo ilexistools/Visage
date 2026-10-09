@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { unzipSync } from 'fflate'
@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createMcpServer } from '../src/mcp.ts'
+import { configureWorkflow } from '../src/projects.ts'
 import { projectDir } from '../src/store.ts'
 import { freshDataDir, install, startServer } from './helpers.ts'
 
@@ -71,6 +72,49 @@ test('the exported plugin runs the state machine standalone with node', async ()
   assert.equal(final.final_state, 'Approved draft')
   assert.deepEqual(flow('status').attempts, { draft: 2, review: 3 })
   assert.match(orchestrator, /choice: approved \/ changes, up to 2 attempts/)
+})
+
+test('exported runs report the final output, share contract files and check postconditions', async () => {
+  await install(server.call, 'checked', {
+    build: { label: 'Build', next: [{ goto: 'review' }] },
+    review: { label: 'Review', evaluation: { type: 'score', question: 'How complete is it?' }, next: [{ goto: 'delivered', when: 'output.result >= 0.8' }, { goto: 'blocked' }] },
+    delivered: { terminal: true, description: 'A working game was delivered', postcondition: { command: 'node "$VISAGE_SHARED_DIR/references/check.mjs"', message: 'The game file exists' } },
+    blocked: { terminal: true, description: 'Needs a human' },
+  }, 'build')
+  mkdirSync(join(projectDir('checked'), 'references'), { recursive: true })
+  writeFileSync(join(projectDir('checked'), 'references', 'CONTRACT.md'), 'Test hook: window.__GAME__\n')
+  // The check ships with the plugin, so the agent cannot weaken it.
+  writeFileSync(join(projectDir('checked'), 'references', 'check.mjs'), "import { existsSync } from 'node:fs'\nconst ok = existsSync(process.env.VISAGE_ARTIFACT_DIR + '/game.html')\nconsole.log(ok ? 'game found' : 'game.html is missing')\nprocess.exit(ok ? 0 : 3)\n")
+  configureWorkflow('checked', { shared_references: ['references/CONTRACT.md', 'references/check.mjs'] })
+  const exported = await server.call('POST', '/api/projects/checked/export')
+  assert.equal(exported.status, 200, JSON.stringify(exported.data))
+  const skill = join(exported.data.path, 'skills/checked')
+  assert.equal(readFileSync(join(skill, 'shared/references/CONTRACT.md'), 'utf8'), 'Test hook: window.__GAME__\n')
+  assert.match(readFileSync(join(skill, 'SKILL.md'), 'utf8'), /postcondition: `node "\$VISAGE_SHARED_DIR\/references\/check\.mjs"`/)
+
+  const workdir = mkdtempSync(join(tmpdir(), 'visage-work-'))
+  const flow = (...args: string[]) => JSON.parse(execFileSync('node', [join(skill, 'scripts/flow.mjs'), ...args, '--state-dir', join(workdir, 'runs')], { encoding: 'utf8', cwd: workdir }))
+  const run = (id: string, makeGame: boolean) => {
+    const step = flow('start', '--run', id, '--input', 'make a game')
+    assert.deepEqual(step.shared_files, ['CONTRACT.md', 'check.mjs'].map(name => realpathSync(join(skill, 'shared/references', name))))
+    if (makeGame) writeFileSync(join(step.artifact_dir, 'game.html'), '<canvas></canvas>')
+    flow('submit', '--run', id, '--output', '{"files": ["game.html"]}')
+    return flow('submit', '--run', id, '--output', '{"result": 0.92, "reason": "Ready to hand over"}')
+  }
+  const good = run('good', true)
+  assert.equal(good.status, 'completed')
+  assert.deepEqual([good.final_step, good.final_output], ['review', { result: 0.92, reason: 'Ready to hand over' }])
+  assert.deepEqual([good.postcondition.passed, good.postcondition.exit_code, good.postcondition.output], [true, 0, 'game found'])
+  assert.equal(good.final_state, 'A working game was delivered')
+
+  const broken = run('broken', false)
+  assert.equal(broken.status, 'failed', 'a high score does not complete a run whose postcondition fails')
+  assert.equal(broken.error, 'Postcondition of delivered failed: The game file exists (exited with 3)')
+  assert.match(broken.postcondition.command, /VISAGE_SHARED_DIR/)
+  assert.deepEqual([broken.postcondition.passed, broken.postcondition.output], [false, 'game.html is missing'])
+  assert.equal(broken.final_state, undefined)
+  const history = readFileSync(join(workdir, 'runs', 'broken', 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual([history.at(-1).status, history.at(-1).postcondition.exit_code], ['failed', 3])
 })
 
 async function connected() {

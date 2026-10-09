@@ -72,7 +72,7 @@ The orchestrator Skill tells the agent to drive the run with the runner. Command
 }
 ```
 
-The agent reads `step_file`, does the work using `input`, `previous_outputs` and `resources_dir`, saves files in `artifact_dir`, writes its JSON output to `output_file` (the folder already exists) and runs `submit` exactly as printed. `output_contract` appears only for evaluated steps.
+The agent reads `step_file` and any `shared_files` (the workflow's `shared_references`, present only when the workflow has some), does the work using `input`, `previous_outputs` and `resources_dir`, saves files in `artifact_dir`, writes its JSON output to `output_file` (the folder already exists) and runs `submit` exactly as printed. `output_contract` appears only for evaluated steps.
 
 ### Replies to `submit`
 
@@ -80,8 +80,8 @@ The reply adds `decision`, `evaluated_node` and `errors` to the next instruction
 
 - `decision: "next"`: the run moved on to `next_node`. When `errors` is empty the output passed; when it is not, the step used up its tries and the run followed `on_fail`. The reply is the next step, or a completed/failed summary when the next node is a final state.
 - `decision: "retry"`: the result was invalid. The same step comes back with `attempt` increased and `feedback`, e.g. `["output.result must be one of [\"approved\",\"changes\"]"]`; fix the output and submit again.
-- `status: "completed"`: a final state was reached (possibly through `on_fail`; check `node` and `final_state`). The reply has `outputs` of every step, `artifact_dir` and, when the final state has a description, `final_state`.
-- `decision: "failed"` with `status: "failed"`: an invalid result after the last try without `on_fail`, a result without an arc (`No transition matched for node <id>`), or `max_steps` exceeded. The reply has `error`; the run cannot continue.
+- `status: "completed"`: a final state was reached (possibly through `on_fail`; check `node`) and its postcondition, if any, passed. The reply has `outputs` of every step, `artifact_dir`, `final_step` and `final_output` (the last submitted step and its output, e.g. its `result` and `reason`), `postcondition` when one ran and, when the final state has a description, `final_state`. Report `final_output` and the artifacts; `final_state` is the same for every run that ends there.
+- `decision: "failed"` with `status: "failed"`: an invalid result after the last try without `on_fail`, a result without an arc (`No transition matched for node <id>`), `max_steps` exceeded (the error lists submissions per step), or a failed postcondition (`Postcondition of <node> failed: ...`, with `postcondition.output`). The reply has `error`; the run cannot continue.
 
 Errors in using the runner print `{"status": "error", "error": "..."}` and exit with code 1, for example `Run is completed; nothing to submit.` or `Current step is review, not draft.`
 
@@ -90,5 +90,7 @@ Errors in using the runner print `{"status": "error", "error": "..."}` and exit 
 The submitted text is read as JSON. A fenced ```` ```json ```` block or the outermost `{...}` in surrounding prose is also accepted; JSON that is not an object becomes `{"value": ...}`, and anything else `{"text": "..."}`; both fail an evaluated step because `result` is missing.
 
 ## Run state
+
+**Postconditions run commands.** A final state's `postcondition` is a shell command the runner executes in the working directory when a run arrives there ([workflow-format.md](workflow-format.md#postconditions)). Read the steps table in the exported `SKILL.md`, which lists every postcondition, before installing a plugin you did not write.
 
 Runs are kept in `.visage/runs/<plugin>/<run-id>/` under the working directory (`--state-dir` or `VISAGE_STATE_DIR` change it): `state.json`, `history.jsonl` (one `start` or `submit` event per line, with the decision, errors and result of each submission; see [testing.md](testing.md)), every submitted output in `outputs/` and the step artifacts in `artifacts/`. A run can be continued later with `next`, even from another session.

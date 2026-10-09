@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
-import type { Evaluation, Transition, Workflow, WorkflowNode } from './engine.ts'
+import type { Evaluation, Postcondition, Transition, Workflow, WorkflowNode } from './engine.ts'
 import { badRequest, checkedId, defaultProjectsDir, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
 import { dumpWorkflow, parseWorkflow, validateWorkflow } from './workflow.ts'
 
@@ -113,11 +113,15 @@ function nodeOf(workflow: Workflow, nodeId: string): WorkflowNode {
   return workflow.nodes[nodeId]
 }
 
-export function configureWorkflow(id: string, settings: { name?: string; description?: string; version?: string; max_steps?: number }) {
+export function configureWorkflow(id: string, settings: { name?: string; description?: string; version?: string; max_steps?: number; shared_references?: string[] }) {
   return edit(id, workflow => {
     workflow.workflow ??= {}
     for (const key of ['name', 'description', 'version'] as const) if (settings[key] !== undefined) workflow.workflow[key] = settings[key]
     if (settings.max_steps !== undefined) workflow.max_steps = settings.max_steps
+    if (settings.shared_references !== undefined) {
+      if (settings.shared_references.length) workflow.shared_references = settings.shared_references
+      else delete workflow.shared_references
+    }
     return {}
   })
 }
@@ -132,6 +136,8 @@ export type NodeInput = {
   evaluation?: Evaluation | null
   max_attempts?: number
   on_fail?: string
+  /** Final nodes only; null removes it. */
+  postcondition?: Postcondition | null
   position?: { x: number; y: number }
 }
 
@@ -161,6 +167,10 @@ export function upsertNode(id: string, nodeId: string, input: NodeInput) {
       delete node.output_schema
       delete node.checks
     }
+    if (input.postcondition !== undefined) {
+      if (input.postcondition) node.postcondition = input.postcondition
+      else delete node.postcondition
+    }
     if (input.skill_path !== undefined) node.skill = { path: input.skill_path }
     if (input.terminal === true) {
       node.terminal = true
@@ -168,6 +178,7 @@ export function upsertNode(id: string, nodeId: string, input: NodeInput) {
       delete node.evaluation
     } else if (input.terminal === false) {
       delete node.terminal
+      delete node.postcondition
       node.next ??= []
       node.skill ??= { path: `skills/${nodeId}/SKILL.md` }
     }

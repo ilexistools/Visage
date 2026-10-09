@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFile
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import yaml from 'js-yaml'
+import { configureWorkflow, getWorkflow, upsertNode } from '../src/projects.ts'
 import { projectDir } from '../src/store.ts'
 import { freshDataDir, startServer } from './helpers.ts'
 
@@ -106,6 +107,36 @@ test('incomplete workflows save with warnings; structural errors are rejected', 
   assert.equal((await server.call('GET', '/api/projects/partial/validate')).data.ready, false)
   const terminalEvaluation = yaml.dump({ version: 1, start: 'c', nodes: { c: { type: 'skill', terminal: true, evaluation: { type: 'predicate' } } } })
   assert.equal((await server.call('PUT', '/api/projects/partial/workflow', { source: terminalEvaluation })).status, 400)
+})
+
+test('state paths, postconditions and shared references are validated', async () => {
+  await server.call('POST', '/api/projects', { id: 'contracts', name: 'Contracts' })
+  const put = (workflow: Record<string, unknown>) => server.call('PUT', '/api/projects/contracts/workflow', { source: yaml.dump({ version: 1, start: 'a', ...workflow }) })
+  const step = (when: string) => ({ a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, next: [{ goto: 'done', when }, { goto: 'a' }] }, done: { type: 'skill', terminal: true } })
+  const warned = async (when: string) => (await put({ nodes: step(when) })).data.warnings as string[]
+  assert.ok((await warned('state.attempts.fixx >= 3')).includes('Node a: "state.attempts.fixx >= 3" refers to unknown step "fixx", so it is always null'))
+  assert.ok((await warned('state.outputs.nope.score > 0.5')).some(warning => warning.includes('unknown step "nope"')))
+  assert.ok((await warned('state.attempt.a >= 3')).some(warning => warning.includes('unknown state key "attempt"')))
+  assert.ok(!(await warned('state.attempts.a >= 3')).some(warning => warning.includes('state')))
+
+  const final = (postcondition: unknown) => put({ nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, next: [{ goto: 'done' }] }, done: { type: 'skill', terminal: true, postcondition } } })
+  assert.equal((await final({ command: 'node check.mjs', message: 'The game starts', timeout_seconds: 60 })).status, 200)
+  for (const bad of ['node check.mjs', { command: '' }, { command: 'x', timeout_seconds: 0 }, { command: 'x', expect: 1 }]) assert.equal((await final(bad)).status, 400, JSON.stringify(bad))
+  const onStep = await put({ nodes: { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, postcondition: { command: 'x' }, next: [{ goto: 'done' }] }, done: { type: 'skill', terminal: true } } })
+  assert.equal(onStep.status, 400)
+  assert.match(onStep.data.detail, /only final nodes/)
+
+  const nodes = { a: { type: 'skill', skill: { path: 'skills/a/SKILL.md' }, next: [{ goto: 'done' }] }, done: { type: 'skill', terminal: true } }
+  assert.ok((await put({ nodes, shared_references: ['references/CONTRACT.md'] })).data.warnings.includes('Shared reference not found: references/CONTRACT.md'))
+  for (const bad of ['../outside.md', '/etc/hosts', ['a.md', 'a.md'], 'not-a-list']) {
+    assert.equal((await put({ nodes, shared_references: Array.isArray(bad) || bad === 'not-a-list' ? bad : [bad] })).status, 400, JSON.stringify(bad))
+  }
+  upsertNode('contracts', 'done', { postcondition: { command: 'node check.mjs' } })
+  assert.deepEqual(getWorkflow('contracts').workflow.nodes.done.postcondition, { command: 'node check.mjs' })
+  upsertNode('contracts', 'done', { terminal: false })
+  assert.equal(getWorkflow('contracts').workflow.nodes.done.postcondition, undefined, 'a step that is no longer final loses its postcondition')
+  configureWorkflow('contracts', { shared_references: [] })
+  assert.equal(getWorkflow('contracts').workflow.shared_references, undefined)
 })
 
 test('serves the editor, falls back to index.html and rejects non-local hosts', async () => {

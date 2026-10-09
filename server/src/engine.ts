@@ -25,13 +25,18 @@ export type WorkflowNode = {
   evaluation?: Evaluation
   max_attempts?: number
   on_fail?: string
+  /** Final nodes only: a shell command the exported runner runs on arrival; the run completes only when it exits 0. */
+  postcondition?: Postcondition
   [key: string]: unknown
 }
+export type Postcondition = { command: string; message?: string; timeout_seconds?: number }
 export type Workflow = {
   version?: number
   workflow?: { id?: string; name?: string; version?: string; description?: string; author?: string }
   start: string
   max_steps?: number
+  /** Project files every step receives, e.g. a contract naming the files and interfaces steps share. */
+  shared_references?: string[]
   nodes: Record<string, WorkflowNode>
   [key: string]: unknown
 }
@@ -256,14 +261,16 @@ export function contextFor(state: RunState, output: JsonObject = {}): { output: 
 
 /**
  * Evaluate a node output and choose the next state.
- * Mutates `state` (outputs, feedback, retries, steps).
+ * Mutates `state` (outputs, feedback, attempts, retries, steps).
  */
 export function decide(workflow: Workflow, state: RunState, nodeId: string, output: JsonObject): Decision {
   const decision = decideOnce(workflow, state, nodeId, output)
   const limit = workflow.max_steps ?? DEFAULT_MAX_STEPS
   const target = workflow.nodes[decision.next_node ?? nodeId] ?? {}
   if (decision.status !== 'failed' && state.steps >= limit && !target.terminal) {
-    return { status: 'failed', node: nodeId, errors: decision.errors, error: `Workflow exceeded max_steps (${limit})` }
+    // Name the steps that used the budget, so a runaway loop is easy to spot.
+    const used = Object.entries(state.attempts).map(([id, count]) => `${id} ${count}`).join(', ')
+    return { status: 'failed', node: nodeId, errors: decision.errors, error: `Workflow exceeded max_steps (${limit}): ${used}` }
   }
   return decision
 }
@@ -272,6 +279,9 @@ function decideOnce(workflow: Workflow, state: RunState, nodeId: string, output:
   const node = workflow.nodes[nodeId]
   const { data } = state
   state.retries ??= {}
+  state.attempts ??= {}
+  // Every submission counts, valid or not; `retries` only counts consecutive invalid ones.
+  state.attempts[nodeId] = (state.attempts[nodeId] ?? 0) + 1
   state.steps = (state.steps ?? 0) + 1
   data.outputs[nodeId] = output
   data.last_output = output

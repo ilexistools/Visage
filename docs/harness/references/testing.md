@@ -9,7 +9,7 @@ Visage tests at two levels:
 
 ## Scenarios
 
-A scenario scripts the result of each step and states the path you expect. Visage simulates it with the same rules as the exported runner (`decide` in `engine.ts`), so a passing scenario routes the same way in a real run.
+A scenario scripts the result of each step and states the path you expect. Visage simulates it with the same rules as the exported runner (`decide` in `engine.ts`), so a passing scenario routes the same way in a real run. Scenarios test routing, not the product: they do not run postconditions, and a scripted `0.92` says nothing about whether the artifact works.
 
 Scenarios live in `scenarios.yaml` in the project folder. For the review workflow in [workflow-format.md](workflow-format.md):
 
@@ -120,5 +120,7 @@ Exported runs write `history.jsonl` in their run folder, one event per line, whi
 {"timestamp":"...","event":"submit","node":"strict","attempt":1,"decision":"retry","errors":["output.result must be of type boolean"],"result":"not-a-boolean","status":"running","current_node":"strict"}
 {"timestamp":"...","event":"submit","node":"strict","attempt":2,"decision":"next","errors":[],"result":true,"next_node":"done_beta","status":"completed","current_node":"done_beta"}
 ```
+
+When a final state has a postcondition, the event that reaches it also carries `postcondition: {node, command, passed, exit_code, output}`, and its `status` is `failed` when the check failed.
 
 Every submitted output is also kept in `outputs/NNN-<step>.json`.

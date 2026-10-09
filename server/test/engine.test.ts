@@ -87,6 +87,47 @@ test('decide retries invalid results with feedback, routes on_fail and on the re
   assert.match(decide(looping, loop, 'a', {}).error ?? '', /max_steps/)
 })
 
+test('decide counts every submission in state.attempts, so a loop can be capped', () => {
+  const workflow: Workflow = {
+    start: 'fix', max_steps: 10,
+    nodes: {
+      fix: { type: 'skill', evaluation: { type: 'predicate' }, max_attempts: 2, next: [{ goto: 'done', when: 'state.attempts.fix >= 2' }, { goto: 'fix' }] },
+      done: { type: 'skill', terminal: true },
+    },
+  }
+  const run = state()
+  assert.equal(decide(workflow, run, 'fix', { result: 'bad' }).status, 'retry')
+  assert.equal(run.attempts.fix, 1, 'an invalid submission counts too')
+  assert.deepEqual(decide(workflow, run, 'fix', { result: true }).next_node, 'done')
+  assert.equal(run.attempts.fix, 2)
+})
+
+test('max_attempts counts consecutive invalid results; a valid result resets the count', () => {
+  const workflow: Workflow = {
+    start: 'design', max_steps: 20,
+    nodes: {
+      design: { type: 'skill', evaluation: { type: 'choice', options: ['good', 'incomplete'] }, max_attempts: 3, on_fail: 'blocked', next: [{ goto: 'done', when: 'output.result == "good"' }, { goto: 'design' }] },
+      done: { type: 'skill', terminal: true },
+      blocked: { type: 'skill', terminal: true },
+    },
+  }
+  const run = state()
+  for (const result of ['incomplete', 42, 'incomplete', 42, 42]) assert.notEqual(decide(workflow, run, 'design', { result }).next_node, 'blocked')
+  assert.equal(decide(workflow, run, 'design', { result: 42 }).next_node, 'blocked', 'the third invalid result in a row goes to on_fail')
+  assert.equal(run.attempts.design, 6)
+})
+
+test('exceeding max_steps names the steps that used the budget', () => {
+  const workflow: Workflow = {
+    start: 'analyze', max_steps: 5,
+    nodes: { analyze: { type: 'skill', next: [{ goto: 'fix' }] }, fix: { type: 'skill', next: [{ goto: 'analyze' }] }, end: { type: 'skill', terminal: true } },
+  }
+  const run = state()
+  let decision = decide(workflow, run, 'analyze', {})
+  while (decision.status === 'next') decision = decide(workflow, run, decision.next_node!, {})
+  assert.equal(decision.error, 'Workflow exceeded max_steps (5): analyze 3, fix 2')
+})
+
 test('word operators need spaces, so run-together text is rejected', () => {
   assert.throws(() => matches("output.within 'abc'", { output: { with: 'b' } }))
   assert.ok(matches("output.with in 'abc'", { output: { with: 'b' } }))

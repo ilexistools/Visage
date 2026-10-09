@@ -10,10 +10,17 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { randomBytes } from 'node:crypto'
-import { contractFor, decide, newStateData, parseOutput, type Json, type RunState, type Workflow } from '../engine.ts'
+import { spawnSync } from 'node:child_process'
+import { contractFor, decide, newStateData, parseOutput, type Json, type JsonObject, type RunState, type Workflow } from '../engine.ts'
 
 type PortableWorkflow = Workflow & { plugin: string }
-type State = RunState & { run_id: string; current_node: string; run_status: 'running' | 'completed' | 'failed'; error?: string; created_at: string; updated_at?: string }
+type PostconditionResult = { node: string; command: string; passed: boolean; exit_code: number | null; output: string; message?: string }
+type State = RunState & {
+  run_id: string; current_node: string; run_status: 'running' | 'completed' | 'failed'; error?: string; created_at: string; updated_at?: string
+  /** The step that produced data.last_output. */
+  last_node?: string
+  postcondition?: PostconditionResult
+}
 
 const SCRIPT = fileURLToPath(import.meta.url)
 const SKILL_DIR = dirname(dirname(SCRIPT))
@@ -49,7 +56,7 @@ function runPath(stateDir: string | undefined, runId?: string): string {
 const load = (path: string): State => JSON.parse(readFileSync(join(path, 'state.json'), 'utf8'))
 
 /** One line per event in history.jsonl: the audit trail used to check that a harness followed the workflow. */
-type HistoryEvent = { event: 'start' } | { event: 'submit'; node: string; attempt: number; decision: string; errors: string[]; result?: Json; next_node?: string }
+type HistoryEvent = { event: 'start'; postcondition?: PostconditionResult } | { event: 'submit'; node: string; attempt: number; decision: string; errors: string[]; result?: Json; next_node?: string; postcondition?: PostconditionResult }
 
 function save(path: string, state: State, event: HistoryEvent): void {
   state.updated_at = now()
@@ -66,9 +73,14 @@ function summary(path: string, state: State) {
     status: state.run_status, run_id: state.run_id, node: state.current_node, outputs: state.data.outputs,
     artifact_dir: join(path, 'artifacts'),
     ...(state.error ? { error: state.error } : {}),
+    // What the run actually produced comes first; the final state's description is the same for every run.
+    ...(state.run_status !== 'running' && state.last_node ? { final_step: state.last_node, final_output: state.data.last_output as JsonObject } : {}),
+    ...(state.postcondition ? { postcondition: state.postcondition } : {}),
     ...(state.run_status === 'completed' && final.description ? { final_state: final.description } : {}),
   }
 }
+
+const sharedFiles = () => (WORKFLOW.shared_references ?? []).map(path => join(SKILL_DIR, path))
 
 function instruction(path: string, state: State) {
   const nodeId = state.current_node
@@ -92,6 +104,7 @@ function instruction(path: string, state: State) {
     resources_dir: stepDir,
     // Feedback belongs to the attempt being retried, not to a later visit of the same step.
     feedback: state.retries[nodeId] ? state.data.feedback[nodeId] ?? [] : [],
+    ...(WORKFLOW.shared_references?.length ? { shared_files: sharedFiles() } : {}),
     input: state.data.input,
     previous_outputs: state.data.outputs,
     ...(contract ? { output_contract: contract } : {}),
@@ -101,8 +114,38 @@ function instruction(path: string, state: State) {
   }
 }
 
-function settle(state: State): void {
-  if (WORKFLOW.nodes[state.current_node].terminal) state.run_status = 'completed'
+const OUTPUT_LIMIT = 4000
+
+/** Run a final node's postcondition from the working directory; the run completes only when it exits 0. */
+function checkPostcondition(path: string, state: State): PostconditionResult | undefined {
+  const node = state.current_node
+  const postcondition = WORKFLOW.nodes[node].postcondition
+  if (!postcondition) return undefined
+  const result = spawnSync(postcondition.command, {
+    shell: true, cwd: process.cwd(), encoding: 'utf8', timeout: (postcondition.timeout_seconds ?? 300) * 1000, maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, VISAGE_RUN_ID: state.run_id, VISAGE_RUN_DIR: path, VISAGE_ARTIFACT_DIR: join(path, 'artifacts'), VISAGE_SHARED_DIR: join(SKILL_DIR, 'shared') },
+  })
+  let output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
+  if (result.error) output = `${output}\n${result.error.message}`.trim()
+  if (output.length > OUTPUT_LIMIT) output = `…${output.slice(-OUTPUT_LIMIT)}`
+  return {
+    node, command: postcondition.command, passed: result.status === 0, exit_code: result.status, output,
+    ...(postcondition.message ? { message: postcondition.message } : {}),
+  }
+}
+
+/** Complete the run when it reached a final node, unless that node's postcondition fails. */
+function settle(path: string, state: State): void {
+  if (!WORKFLOW.nodes[state.current_node].terminal) return
+  const check = checkPostcondition(path, state)
+  if (check) state.postcondition = check
+  if (check && !check.passed) {
+    state.run_status = 'failed'
+    const reason = check.exit_code === null ? 'did not finish' : `exited with ${check.exit_code}`
+    state.error = `Postcondition of ${check.node} failed: ${check.message ?? check.command} (${reason})`
+  } else {
+    state.run_status = 'completed'
+  }
 }
 
 const commands: Record<string, (values: Record<string, string | undefined>) => void> = {
@@ -120,8 +163,8 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
       run_id: runId, workflow: WORKFLOW.workflow, current_node: WORKFLOW.start, run_status: 'running',
       data: newStateData(input), attempts: {}, retries: {}, steps: 0, created_at: now(),
     }
-    settle(state)
-    save(path, state, { event: 'start' })
+    settle(path, state)
+    save(path, state, { event: 'start', ...(state.postcondition ? { postcondition: state.postcondition } : {}) })
     writeFileSync(join(root, 'LATEST'), runId)
     emit(instruction(path, state))
   },
@@ -137,8 +180,8 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
     const output = parseOutput(text)
     const nodeId = state.current_node
     if (values.node && values.node !== nodeId) fail(`Current step is ${nodeId}, not ${values.node}. Run the 'next' command to see the current step.`)
-    state.attempts[nodeId] = (state.attempts[nodeId] ?? 0) + 1
     const decision = decide(WORKFLOW, state, nodeId, output)
+    state.last_node = nodeId
     mkdirSync(join(path, 'outputs'), { recursive: true })
     writeFileSync(join(path, 'outputs', `${String(state.steps).padStart(3, '0')}-${nodeId}.json`), JSON.stringify(output, null, 2))
     if (decision.status === 'failed') {
@@ -146,12 +189,13 @@ const commands: Record<string, (values: Record<string, string | undefined>) => v
       state.error = decision.error
     } else if (decision.status === 'next') {
       state.current_node = decision.next_node!
-      settle(state)
+      settle(path, state)
     }
     save(path, state, {
       event: 'submit', node: nodeId, attempt: state.attempts[nodeId], decision: decision.status, errors: decision.errors,
       ...(output.result !== undefined ? { result: output.result } : {}),
       ...(decision.next_node ? { next_node: decision.next_node } : {}),
+      ...(state.postcondition && state.run_status !== 'running' ? { postcondition: state.postcondition } : {}),
     })
     emit({
       decision: decision.status, evaluated_node: nodeId, errors: decision.errors,

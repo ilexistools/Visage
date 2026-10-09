@@ -16,14 +16,14 @@ Visage keeps workflows as **projects**: a folder with `workflow.yaml` (the state
 
 1. **Plan the steps** with the user: what each step does, what it decides, and where each decision leads. Keep one clear responsibility per step. See [authoring-guide.md](references/authoring-guide.md) for patterns.
 2. `create_project` with a short `project_id` (letters, digits, `-`, `_`) and a readable `name`. Then `configure_workflow` with a `description` that says when the workflow should be used: it becomes the description of the exported Skill.
-3. For each step, `upsert_node` with `label`, a one-line `description` and `skill_markdown`: the complete instructions an agent will follow for that step (inputs it reads, files it writes, how it decides). The first step created (never a final state) becomes the start node; change it with `set_start`.
+3. For each step, `upsert_node` with `label`, a one-line `description` and `skill_markdown`: the complete instructions an agent will follow for that step (inputs it reads, files it writes, how it decides). When several steps depend on the same names (files in the artifact folder, test hooks, data formats), first write them to one contract file with `write_file` and list it in `configure_workflow` `shared_references`; see [authoring-guide.md](references/authoring-guide.md#shared-contract). The first step created (never a final state) becomes the start node; change it with `set_start`.
 4. Give an `evaluation` to every step whose outcome chooses the next step:
    - `predicate`: result `true`/`false` ("Does the game pass every test?")
    - `choice`: result is one of `options` ("approved / changes / rejected?")
    - `score`: result is a number from 0 to 1 ("How complete is the result?")
 
-   Always write the `question`. Steps that only produce files need no evaluation. Use `max_attempts` (total tries when the result is invalid, each retry with feedback; the default 1 means no retry) and `on_fail` (where to go after the last invalid try) when a step may answer badly.
-5. Create the end states with `upsert_node` and `terminal: true`, with a `description` of the outcome.
+   Always write the `question`. Steps that only produce files need no evaluation. Use `max_attempts` (consecutive invalid results allowed, each retry with feedback; the default 1 means no retry; a valid result resets the count) and `on_fail` (where to go after the last invalid try) when a step may answer badly. A valid but unwanted result never reaches `on_fail`: route it with an arc.
+5. Create the end states with `upsert_node` and `terminal: true`, with a `description` of the outcome. When the workflow delivers something that can be run (a page, a game, a CLI), give the success state a `postcondition` that runs it through its real entry point using only Node.js and the shell; see [workflow-format.md](references/workflow-format.md#postconditions).
 6. Connect the steps with `set_transitions` (it replaces all arcs of a step). Route on the result:
    - predicate: `output.result == true`, `output.result == false`
    - choice: `output.result == "approved"`
