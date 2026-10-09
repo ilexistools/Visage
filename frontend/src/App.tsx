@@ -5,11 +5,12 @@ import { toPng } from 'html-to-image'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, FlaskConical, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, FlaskConical, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
 import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
 import { TestsPanel } from './TestsPanel'
 import { conditionSummary } from './evaluation'
+import { autoLayout, estimateLabelSize } from './autoLayout'
 import { defaultPosition, edgeId, layoutEdgePorts, parsePortId, PORT_SLOTS, portId, routeCenter, type EdgePorts, type PortSide } from './edgeLayout'
 
 type WorkflowDoc = { version: number; workflow: { id: string; name: string; version: string }; start: string; nodes: Record<string, any> }
@@ -49,14 +50,14 @@ function FlowNode({ data, selected }: any) {
 const nodeTypes = { vasm: FlowNode }
 
 function FlowEdge(props: EdgeProps) {
-  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle; condition?: string; question?: string } | undefined
+  const data = props.data as { onLabelChange?: (value: string) => void; ports?: EdgePorts; lineStyle?: LineStyle; condition?: string; question?: string; showQuestion?: boolean } | undefined
   const ends = { sourceX: props.sourceX, sourceY: props.sourceY, sourcePosition: props.sourcePosition, targetX: props.targetX, targetY: props.targetY, targetPosition: props.targetPosition }
   const [path, labelX, labelY] = data?.lineStyle === 'straight' ? getStraightPath(ends)
     : data?.lineStyle === 'curved' ? getBezierPath({ ...ends, curvature: 0.3 })
     : getSmoothStepPath({ ...ends, offset: 18, ...(data?.ports ? routeCenter(data.ports, { x: props.sourceX, y: props.sourceY }, { x: props.targetX, y: props.targetY }) : {}) })
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} interactionWidth={20} />
-    <EdgeLabelRenderer><div className={`editable-arc-label nodrag nopan ${!props.label && !data?.condition && !data?.question ? 'empty-label' : ''}`} style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data?.question && <span className="arc-question" title={data.question}>{data.question}</span>}<InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
+    <EdgeLabelRenderer><div className={`editable-arc-label nodrag nopan ${!props.label && !data?.condition && !data?.question ? 'empty-label' : ''}`} title={data?.question && !data.showQuestion ? data.question : undefined} style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data?.question && data.showQuestion && <span className="arc-question" title={data.question}>{data.question}</span>}<InlineText value={String(props.label || '')} onCommit={data?.onLabelChange || (() => {})} title="Double-click to edit arc text" placeholder={data?.condition || '+'} /></div></EdgeLabelRenderer>
   </>
 }
 const edgeTypes = { editable: FlowEdge }
@@ -70,6 +71,11 @@ const LINE_STYLES: { value: LineStyle; label: string; icon: typeof Spline }[] = 
 const readLineStyle = (): LineStyle => {
   try { const value = localStorage.getItem('vasm-line-style'); return value === 'curved' || value === 'straight' ? value : 'step' } catch { return 'step' }
 }
+
+/** The connection points an arc had before, when it still leads to the same node. */
+const pinsOf = (transition: any, goto: string) => transition && transition.goto === goto
+  ? { ...(transition.source_handle ? { source_handle: transition.source_handle } : {}), ...(transition.target_handle ? { target_handle: transition.target_handle } : {}) }
+  : {}
 
 const portPosition = (side: PortSide) => ({ left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom })[side]
 
@@ -101,6 +107,11 @@ export default function App() {
   const lastSkillAutosaveRef = useRef('')
   const importSkillInput = useRef<HTMLInputElement>(null)
   const [notice, setNotice] = useState('')
+  /** Node positions and pinned arc ends before the last automatic layout, while it can be undone. */
+  const [layoutUndo, setLayoutUndo] = useState<Record<string, any> | null>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  /** Positions the last automatic layout produced: clicking again on them asks for a variation. */
+  const lastLayoutRef = useRef('')
   const [busy, setBusy] = useState(false)
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
   const [mobileProjectOpen, setMobileProjectOpen] = useState(false)
@@ -241,6 +252,46 @@ export default function App() {
     window.addEventListener('keydown', closeOnEscape)
     return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape) }
   }, [warningsOpen])
+  const LAYOUT_NOTICE = 'Layout reorganized.'
+  useEffect(() => { if (notice !== LAYOUT_NOTICE) setLayoutUndo(null) }, [notice])
+  /** Arrange every node in ranks along the flow, fit it to the canvas and keep the old layout for Undo. */
+  const arrangeLayout = () => {
+    const ids = Object.keys(workflow.nodes || {})
+    if (!ids.length) return
+    const box = canvasRef.current?.getBoundingClientRect()
+    const labelSize = (source: string, index: number) => {
+      const node = workflow.nodes[source]
+      const transition = node.next?.[index] || {}
+      // The step's question is shown once, above its first arc.
+      return estimateLabelSize(transition.label || conditionSummary(transition.when, node.evaluation), index === 0 ? node.evaluation?.question : undefined)
+    }
+    const current = Object.fromEntries(ids.map(id => [id, workflow.nodes[id].position || { x: 0, y: 0 }]))
+    // The first click gives the best layout; each further click on an untouched result, a new variation.
+    const seed = lastLayoutRef.current === JSON.stringify(current) ? 1 + Math.floor(Math.random() * 2 ** 30) : undefined
+    const { positions } = autoLayout(workflow.nodes, workflow.start, { width: box?.width || 1200, height: box?.height || 700 }, labelSize, { seed, avoid: current })
+    lastLayoutRef.current = JSON.stringify(Object.fromEntries(ids.map(id => [id, positions[id]])))
+    setLayoutUndo(workflow.nodes)
+    setWorkflow(old => ({
+      ...old,
+      nodes: Object.fromEntries(Object.entries(old.nodes).map(([id, node]: [string, any]) => [id, {
+        ...node,
+        position: positions[id] ?? node.position,
+        // Pinned connection points belong to the old arrangement; let the new one choose.
+        ...(node.next ? { next: node.next.map(({ source_handle: _source, target_handle: _target, ...transition }: any) => transition) } : {}),
+      }])),
+    }))
+    setDirty(true)
+    setNotice(LAYOUT_NOTICE)
+    setTimeout(() => flowInstance?.fitView({ padding: 0.12, duration: 350 }), 60)
+  }
+  const undoLayout = () => {
+    if (!layoutUndo) return
+    const previous = layoutUndo
+    setWorkflow(old => ({ ...old, nodes: Object.fromEntries(Object.entries(old.nodes).map(([id, node]: [string, any]) => [id, previous[id] ? { ...node, position: previous[id].position, ...(node.next ? { next: node.next.map((transition: any, index: number) => ({ ...transition, ...pinsOf(previous[id].next?.[index], transition.goto) })) } : {}) } : node])) }))
+    setDirty(true)
+    setNotice('')
+    setTimeout(() => flowInstance?.fitView({ padding: 0.12, duration: 350 }), 60)
+  }
   const tell = (value: unknown) => setNotice(value instanceof Error ? value.message : String(value))
   const loadProjects = useCallback(async () => { try { setProjects(await api('/projects')) } catch (e) { tell(e) } }, [])
   useEffect(() => { loadProjects() }, [loadProjects])
@@ -277,7 +328,7 @@ export default function App() {
       },
     }))
     const mappedEdges: Edge[] = Object.entries(workflow.nodes || {}).flatMap(([id, node]) => (node.terminal ? [] : node.next || []).flatMap((next: any, index: number) => !ports[edgeId(id, next.goto, index)] ? [] : [{
-      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, condition: conditionSummary(next.when, node.evaluation), question: node.evaluation?.question, onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
+      id: edgeId(id, next.goto, index), source: id, target: next.goto, sourceHandle: ports[edgeId(id, next.goto, index)].sourceHandle, targetHandle: ports[edgeId(id, next.goto, index)].targetHandle, label: next.label || '', type: 'editable', data: { ports: ports[edgeId(id, next.goto, index)], lineStyle, condition: conditionSummary(next.when, node.evaluation), question: node.evaluation?.question, showQuestion: index === 0, onLabelChange: (label: string) => { setWorkflow(old => ({ ...old, nodes: { ...old.nodes, [id]: { ...old.nodes[id], next: (old.nodes[id].next || []).map((transition: any, transitionIndex: number) => transitionIndex === index ? { ...transition, label } : transition) } } })); setDirty(true) } },
       markerEnd: { type: MarkerType.Arrow, color: '#667b99', width: 14, height: 14 },
       style: { stroke: '#667b99', strokeWidth: 2.2 }, labelStyle: { fill: '#64748b', fontSize: 11 },
     }]))
@@ -608,7 +659,7 @@ export default function App() {
       {!explorerCollapsed && <div className="resize-handle left" role="separator" aria-orientation="vertical" aria-label="Resize Explorer" aria-valuemin={160} aria-valuemax={440} aria-valuenow={explorerWidth} tabIndex={0} onPointerDown={event => beginResize('left', event)} onKeyDown={event => { if (event.key === 'ArrowRight') setExplorerWidth(value => Math.min(440, value + 12)); if (event.key === 'ArrowLeft') setExplorerWidth(value => Math.max(160, value - 12)) }}><GripVertical size={13} /></div>}
 
       <main className="main-area">
-        <div className="canvas-wrap">
+        <div className="canvas-wrap" ref={canvasRef}>
           <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={setFlowInstance} onPaneClick={() => { setContextMenu(null); setSelectedNode(null) }} onPaneContextMenu={event => openContextMenu(event)} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodesDelete={deleted => deleted.forEach(node => removeNode(node.id))} onEdgesDelete={removeEdges} onNodeClick={(_, node) => { setSelectedNode(node.id); setContextMenu(null) }} onNodeContextMenu={(event, node) => { setSelectedNode(node.id); openContextMenu(event, { kind: 'node', id: node.id }) }} onEdgeClick={() => setContextMenu(null)} onEdgeContextMenu={(event, edge) => openContextMenu(event, { kind: 'edge', id: edge.id, source: edge.source, target: edge.target })} onNodeDragStop={onMoveEnd} onConnect={onConnect} connectionMode={ConnectionMode.Loose} fitView fitViewOptions={{ padding: 0.23 }} minZoom={0.35} maxZoom={1.5} proOptions={{ hideAttribution: false }}><Background color="#d8e2ef" gap={22} size={1} /><Controls /></ReactFlow>
           {contextMenu && <div className="canvas-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onContextMenu={event => event.preventDefault()}>
             <span className="context-menu-title">Add node</span>
@@ -625,7 +676,7 @@ export default function App() {
               <button className="danger" role="menuitem" onClick={() => contextMenu.target?.kind === 'edge' && removeEdge(contextMenu.target.id, contextMenu.target.source, contextMenu.target.target)}><Unplug size={14} />Delete connection</button>
             </>}
           </div>}
-          <div className="line-style-toggle" role="radiogroup" aria-label="Line style">{LINE_STYLES.map(({ value, label, icon: Icon }) => <button key={value} type="button" role="radio" aria-checked={lineStyle === value} aria-label={label} title={label} className={lineStyle === value ? 'active' : ''} onClick={() => setLineStyle(value)}><Icon size={14} /></button>)}</div>
+          <div className="line-style-toggle"><div className="line-style-options" role="radiogroup" aria-label="Line style">{LINE_STYLES.map(({ value, label, icon: Icon }) => <button key={value} type="button" role="radio" aria-checked={lineStyle === value} aria-label={label} title={label} className={lineStyle === value ? 'active' : ''} onClick={() => setLineStyle(value)}><Icon size={14} /></button>)}</div><span className="toolbar-separator" aria-hidden="true" /><button type="button" aria-label="Reorganize layout" title="Reorganize layout: arrange the steps along the flow, without overlaps, and fit them on screen. Click again for another arrangement" disabled={!Object.keys(workflow.nodes || {}).length} onClick={arrangeLayout}><RefreshCw size={14} /></button></div>
           <div className="canvas-hint">Drag nodes to arrange · Connect handles to add transitions</div>
         </div>
 
@@ -671,6 +722,6 @@ export default function App() {
       </>}
       <div className="modal-actions"><button type="button" onClick={() => setDialog(null)}>Cancel</button><button type="submit" disabled={dialog.kind === 'project' && (!projectParentPath || folderPickerBusy)} className={dialog.kind === 'delete' ? 'delete-confirm' : 'create'}>{dialog.kind === 'project' ? 'Create project' : dialog.kind === 'rename' ? 'Save name' : 'Delete project'}</button></div>
     </form></div>}
-    {notice && <div className="notice"><span>{notice}</span><button onClick={() => setNotice('')}>×</button></div>}
+    {notice && <div className="notice"><span>{notice}</span>{layoutUndo && <button type="button" className="notice-action" onClick={undoLayout}>Undo</button>}<button onClick={() => setNotice('')}>×</button></div>}
   </div>
 }

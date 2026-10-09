@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A "Reorganize layout" button next to the line styles arranges the canvas automatically: steps in ranks along the flow, without overlaps, with room for arc labels, in the orientation that fits the screen best, then fitted to view. Clicking again gives a different arrangement each time (order of branches, spacing, orientation when both fit), never with overlaps or more than one extra crossing. Undo restores the previous arrangement.
+
+### Changed
+
+- A step's evaluation question is shown once, above its first arc, instead of on every arc; the other arcs show it on hover.
+
 ## [0.4.0] - 2026-10-09
 
 ### Added
