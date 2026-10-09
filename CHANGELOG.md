@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-09
+
 ### Added
 
 - Validation warns about a shallow Skill: fewer than 150 words, no numbered procedure, no quality criteria or definition of done, no JSON example, the placeholder text, or an evaluated step whose Skill never names `result` or one of its outcomes. The warning comes back in the `upsert_node` reply, so agents building a workflow complete the Skill before moving on; it does not block export.
@@ -96,7 +98,8 @@ Initial Python version.
 - Added illustrative text labels to workflow arcs, separate from transition decision conditions.
 - Added an inline Markdown Skill editor and imports for binary or text resources into each Skill folder.
 
-[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ilexistools/Visage/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ilexistools/Visage/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ilexistools/Visage/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ilexistools/Visage/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ilexistools/Visage/compare/v0.3.0...v0.3.1
