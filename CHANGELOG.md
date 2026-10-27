@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Postconditions now run on Windows: the runner expands `$NAME`, `${NAME}` and `%NAME%` from the environment before the shell sees the command, so the documented `node "$VISAGE_SHARED_DIR/references/check.mjs"` no longer fails there (cmd.exe leaves `$NAME` alone).
+- `~` in `parent_path` and `output_dir` expands the same way on every platform: `HOME` is used when it is set (also on Windows) and `~\plugins` is accepted, and the export and project paths no longer disagree about which folder `~` is.
+- `visage conformance --command` quotes its placeholders for the shell it actually runs in, so a custom harness command works on Windows.
+- The test suite passes on Windows: no path is interpolated into an import specifier, separators are compared with `path.sep`, the documentation tests read files with LF endings whatever the checkout's line-ending policy is, and the test server no longer closes an idle socket under a client that still has it pooled.
+- Added `.gitattributes` so the repository is checked out with LF on every platform.
+
 ## [0.6.0] - 2026-10-09
 
 ### Added

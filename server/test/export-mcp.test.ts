@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { unzipSync } from 'fflate'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -205,7 +205,7 @@ test('export and runner reject unsafe names and keep Skills clean', async () => 
   const out = mkdtempSync(join(tmpdir(), 'visage-out-'))
   const exported = await server.call('POST', '/api/projects/safe/export', { output_dir: join(out, 'x') })
   assert.equal(exported.status, 200, JSON.stringify(exported.data))
-  assert.ok(exported.data.zip.startsWith(join(out, 'x') + '/'), exported.data.zip)
+  assert.ok(exported.data.zip.startsWith(join(out, 'x') + sep), exported.data.zip)
   const skill = join(exported.data.path, 'skills/safe')
   assert.equal(readFileSync(join(skill, 'nodes/draft/STEP.md'), 'utf8'), '# Draft\r\n')
   assert.ok(readFileSync(join(skill, 'SKILL.md'), 'utf8').includes('choice: x \\| y / z'))

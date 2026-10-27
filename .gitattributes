@@ -1,0 +1,3 @@
+# Store text as LF and check it out as LF on every platform: the documentation tests, the
+# exported plugins and the workflow format all assume it.
+* text=auto eol=lf

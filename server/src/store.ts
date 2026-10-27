@@ -13,8 +13,14 @@ export class HttpError extends Error {
 export const badRequest = (message: string) => new HttpError(400, message)
 export const notFound = (message: string) => new HttpError(404, message)
 
+/** The user's home folder: `HOME` first, so a shell or a test can point it elsewhere on every platform. */
+export const homeDir = () => process.env.HOME || process.env.USERPROFILE || homedir()
+
+/** Expand a leading `~` (`~/x`, and `~\x` on Windows) to the home folder. */
+export const expandHome = (value: string) => value.replace(/^~(?=$|[\\/])/, homeDir())
+
 /** Data directory for the project catalog; read on every call so tests and processes can change it. */
-export const dataDir = () => resolve(process.env.VISAGE_DATA_DIR || join(homedir(), '.visage'))
+export const dataDir = () => resolve(process.env.VISAGE_DATA_DIR || join(homeDir(), '.visage'))
 export const now = () => new Date().toISOString()
 
 export function checkedId(value: string): string {

@@ -125,7 +125,10 @@ export function checkRun(root: string, scenario: ProbeScenario, canaries: Record
 export type Harness = { name: string; command: (context: RunContext) => { command: string; args: string[]; shell?: boolean } }
 type RunContext = { prompt: string; plugin: string; skill: string; workdir: string; inputFile: string; model?: string }
 
-const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+/** Quote a value for the shell Node uses for `shell: true`: cmd.exe does not understand single quotes. */
+const quote = (value: string) => process.platform === 'win32'
+  ? `"${value.replace(/"/g, '""')}"`
+  : `'${value.replace(/'/g, `'\\''`)}'`
 
 export function harnessFor(name: string, options: { model?: string; command?: string; bin?: string }): Harness {
   if (options.command) {

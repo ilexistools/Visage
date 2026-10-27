@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unl
 import { join, relative, resolve, sep } from 'node:path'
 import { PLACEHOLDER_SKILL } from './skillQuality.ts'
 import type { Evaluation, Postcondition, Transition, Workflow, WorkflowNode } from './engine.ts'
-import { badRequest, checkedId, defaultProjectsDir, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
+import { badRequest, checkedId, defaultProjectsDir, expandHome, findProject, inside, isInside, listProjects, notFound, now, projectDir, updateProjects, withLock, workflowPath, writeJson, writeText, type Project } from './store.ts'
 import { dumpWorkflow, parseWorkflow, validateWorkflow } from './workflow.ts'
 
 const MAX_FILE_BYTES = 25_000_000
@@ -24,7 +24,7 @@ export function createProject(input: { id: string; name: string; parent_path?: s
   let path: string
   if (parentPath) {
     input = { ...input, parent_path: parentPath }
-    const parent = resolve(input.parent_path!.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'))
+    const parent = resolve(expandHome(input.parent_path!))
     if (!existsSync(parent) || !statSync(parent).isDirectory()) throw badRequest('Choose an existing parent folder')
     path = join(parent, id)
   } else {

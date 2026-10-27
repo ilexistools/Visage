@@ -2,6 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import yaml from 'js-yaml'
 import { configureWorkflow, getWorkflow, upsertNode } from '../src/projects.ts'
@@ -175,7 +176,7 @@ test('projects cannot be nested, and node IDs like constructor are ordinary node
 
 test('concurrent processes do not lose catalog entries', async () => {
   const { execFile } = await import('node:child_process')
-  const script = `import { createProject } from '${join(import.meta.dirname, '../src/projects.ts')}'; for (let i = 0; i < 15; i++) createProject({ id: 'p' + process.argv[2] + '-' + i, name: 'x' })`
+  const script = `import { createProject } from '${pathToFileURL(join(import.meta.dirname, '../src/projects.ts')).href}'; for (let i = 0; i < 15; i++) createProject({ id: 'p' + process.argv[2] + '-' + i, name: 'x' })`
   const file = join(mkdtempSync(join(tmpdir(), 'visage-race-')), 'race.ts')
   writeFileSync(file, script)
   await Promise.all(['a', 'b', 'c'].map(tag => new Promise((resolve, reject) => execFile(process.execPath, ['--import', 'tsx', file, tag], { env: process.env }, error => error ? reject(error) : resolve(null)))))

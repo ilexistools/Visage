@@ -116,14 +116,30 @@ function instruction(path: string, state: State) {
 
 const OUTPUT_LIMIT = 4000
 
+/**
+ * Expand `$NAME`, `${NAME}` and `%NAME%` before the command reaches the shell.
+ *
+ * `cmd.exe` leaves `$VISAGE_SHARED_DIR` untouched, so a postcondition written the way the docs
+ * recommend (and the way it has to be written on POSIX) would never run on Windows. Expanding the
+ * variables ourselves makes one command work on both, and leaves an unknown name alone so a shell
+ * that defines its own variables still sees it.
+ */
+export function expandVariables(command: string, env: NodeJS.ProcessEnv): string {
+  const value = (name: string) => (env[name] === undefined ? undefined : env[name]!)
+  return command
+    .replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced: string | undefined, plain: string | undefined) => value(braced ?? plain!) ?? match)
+    .replace(/%(\w+)%/g, (match, name: string) => value(name) ?? match)
+}
+
 /** Run a final node's postcondition from the working directory; the run completes only when it exits 0. */
 function checkPostcondition(path: string, state: State): PostconditionResult | undefined {
   const node = state.current_node
   const postcondition = WORKFLOW.nodes[node].postcondition
   if (!postcondition) return undefined
-  const result = spawnSync(postcondition.command, {
+  const env = { ...process.env, VISAGE_RUN_ID: state.run_id, VISAGE_RUN_DIR: path, VISAGE_ARTIFACT_DIR: join(path, 'artifacts'), VISAGE_SHARED_DIR: join(SKILL_DIR, 'shared') }
+  const result = spawnSync(expandVariables(postcondition.command, env), {
     shell: true, cwd: process.cwd(), encoding: 'utf8', timeout: (postcondition.timeout_seconds ?? 300) * 1000, maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, VISAGE_RUN_ID: state.run_id, VISAGE_RUN_DIR: path, VISAGE_ARTIFACT_DIR: join(path, 'artifacts'), VISAGE_SHARED_DIR: join(SKILL_DIR, 'shared') },
+    env,
   })
   let output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
   if (result.error) output = `${output}\n${result.error.message}`.trim()

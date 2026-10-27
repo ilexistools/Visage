@@ -1,10 +1,13 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import yaml from 'js-yaml'
 import { createHttpServer } from '../src/http.ts'
 import { projectDir } from '../src/store.ts'
+
+/** Read a repository file with LF endings, whatever line-ending policy the checkout used. */
+export const readLf = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
 
 /** Point the catalog at a fresh temporary data directory. */
 export function freshDataDir(): string {
@@ -15,6 +18,10 @@ export function freshDataDir(): string {
 
 export async function startServer(uiDir: string | null = null) {
   const server = createHttpServer({ uiDir, editorUrl: async () => base })
+  // Node drops an idle keep-alive socket after 5s. A test that spawns processes can leave the
+  // client's pool holding a socket the server has just closed, and the next request then fails
+  // with ECONNRESET; the real server also holds MCP streams open, so it must not be that eager.
+  server.keepAliveTimeout = 60_000
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {

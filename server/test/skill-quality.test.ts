@@ -1,13 +1,12 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { WorkflowNode } from '../src/engine.ts'
 import { skillGaps, PLACEHOLDER_SKILL } from '../src/skillQuality.ts'
 import { upsertNode, validateProject } from '../src/projects.ts'
-import { freshDataDir, startServer } from './helpers.ts'
+import { freshDataDir, readLf, startServer } from './helpers.ts'
 
-const guide = readFileSync(join(import.meta.dirname, '..', '..', 'docs', 'harness', 'references', 'authoring-guide.md'), 'utf8')
+const guide = readLf(join(import.meta.dirname, '..', '..', 'docs', 'harness', 'references', 'authoring-guide.md'))
 const review: WorkflowNode = { type: 'skill', evaluation: { type: 'choice', question: 'Is the draft ready?', options: ['approved', 'changes', 'rejected'] } }
 const filler = (words: number) => Array.from({ length: words }, (_, i) => `word${i}`).join(' ')
 
