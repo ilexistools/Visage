@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A button in the canvas toolbar adds a step at the centre of the visible canvas. It selects the new step and opens the Inspector, and searches outward for a free slot so it does not land on an existing node.
+- A help button next to Export opens a panel with the editor shortcuts and links to the README, the harness/MCP guide, the workflow format and the testing guide.
+
 ### Changed
 
 - The editor follows one type scale: `style.css` defines `--text-micro` (11px), `--text-small` (12px), `--text-body` (13px), `--text-emphasis` (14px), `--text-title` (16px) and `--text-heading` (18px), and every label, button, field, menu, step title and hint uses one of them. Arc labels, the Monaco editors and React Flow's attribution are on the same scale. Text that used to be 9–10.5px is no longer below 11px, and a test fails if the stylesheet gains an ad-hoc pixel size again.

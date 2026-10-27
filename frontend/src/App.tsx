@@ -5,7 +5,7 @@ import { toPng } from 'html-to-image'
 import yaml from 'js-yaml'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { BookOpen, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, FlaskConical, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
+import { BookOpen, CircleHelp, Code2, Ellipsis, Eye, Folder, FolderPlus, GripVertical, CornerDownRight, FileCode2, FileText, FlaskConical, Image as ImageIcon, Magnet, TriangleAlert, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Slash, Spline, SquarePlus, Trash2, Unplug, Upload, Workflow } from 'lucide-react'
 import { api, del, post, put } from './api'
 import { ArcConditions, EvaluationEditor } from './EvaluationEditor'
 import { TestsPanel } from './TestsPanel'
@@ -21,6 +21,21 @@ type ContextMenuState = { x: number; y: number; flowPosition: { x: number; y: nu
 
 const emptyWorkflow: WorkflowDoc = { version: 1, workflow: { id: '', name: '', version: '0.1.0' }, start: '', nodes: {} }
 const defaultNodeLabel = (_type?: string) => 'Step'
+/** A free spot for a new step: start at `base` and search outward in whole-node rings. */
+function freeNodePosition(base: { x: number; y: number }, positions: { x: number; y: number }[]) {
+  const stepX = 247
+  const stepY = 131
+  for (let ring = 0; ring < 8; ring++) {
+    for (let dx = -ring; dx <= ring; dx++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
+        const candidate = { x: base.x + dx * stepX, y: base.y + dy * stepY }
+        if (!positions.some(position => Math.abs(position.x - candidate.x) < 227 && Math.abs(position.y - candidate.y) < 111)) return candidate
+      }
+    }
+  }
+  return base
+}
 const encodedProjectPath = (path: string) => path.split('/').map(encodeURIComponent).join('/')
 const encodeFileBase64 = (buffer: ArrayBuffer) => {
   const bytes = new Uint8Array(buffer)
@@ -68,6 +83,12 @@ const LINE_STYLES: { value: LineStyle; label: string; icon: typeof Spline }[] = 
   { value: 'curved', label: 'Curved lines', icon: Spline },
   { value: 'straight', label: 'Straight lines', icon: Slash },
   { value: 'step', label: 'Orthogonal lines', icon: CornerDownRight },
+]
+const HELP_LINKS = [
+  { label: 'Getting started', href: 'https://github.com/ilexistools/Visage#readme' },
+  { label: 'Agent harnesses and MCP', href: 'https://github.com/ilexistools/Visage/blob/main/docs/harness/README.md' },
+  { label: 'Workflow format', href: 'https://github.com/ilexistools/Visage/blob/main/docs/harness/references/workflow-format.md' },
+  { label: 'Testing and conformance', href: 'https://github.com/ilexistools/Visage/blob/main/docs/harness/references/testing.md' },
 ]
 const readLineStyle = (): LineStyle => {
   try { const value = localStorage.getItem('vasm-line-style'); return value === 'curved' || value === 'straight' ? value : 'step' } catch { return 'step' }
@@ -182,6 +203,15 @@ export default function App() {
     window.addEventListener('keydown', closeOnEscape)
     return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape) }
   }, [exportMenuOpen])
+  const [helpOpen, setHelpOpen] = useState(false)
+  useEffect(() => {
+    if (!helpOpen) return
+    const close = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('.help-wrap')) setHelpOpen(false) }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setHelpOpen(false) }
+    document.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape) }
+  }, [helpOpen])
   const download = (url: string, filename: string) => {
     const link = document.createElement('a'); link.href = url; link.download = filename
     document.body.appendChild(link); link.click(); link.remove()
@@ -605,6 +635,12 @@ export default function App() {
       setSelectedNode(id); setMobileInspectorOpen(true); setDirty(true); setFiles(await api(`/projects/${projectId}/files`))
     } catch (error) { tell(error) } finally { setBusy(false) }
   }
+  const addNodeFromToolbar = () => {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    const center = rect && flowInstance ? flowInstance.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : null
+    const positions = Object.values(workflow.nodes).flatMap((node: any) => node.position ? [node.position] : [])
+    addNode('skill', center ? freeNodePosition({ x: center.x - 103, y: center.y - 46 }, positions) : null)
+  }
   const beginResize = (side: 'left' | 'right', event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     const panel = side === 'left' ? 'explorer' : 'inspector'
@@ -647,6 +683,18 @@ export default function App() {
         <button role="menuitem" onClick={exportPlugin}><Package size={14} /><span><strong>Plugin</strong><small>Claude Code and Codex (.zip)</small></span></button>
         <button role="menuitem" onClick={exportImage}><ImageIcon size={14} /><span><strong>Image</strong><small>The flow as shown (.png)</small></span></button>
         <button role="menuitem" onClick={exportDiagram}><FileCode2 size={14} /><span><strong>Diagram</strong><small>Mermaid, for READMEs and docs (.mmd)</small></span></button>
+      </div>}</div><div className="help-wrap"><button className="button subtle icon-button" data-tooltip="Help" aria-label="Help" aria-haspopup="dialog" aria-expanded={helpOpen} onClick={() => setHelpOpen(open => !open)}><CircleHelp size={15} /></button>{helpOpen && <div className="help-panel" role="dialog" aria-label="Help">
+        <div className="help-head"><span className="eyebrow">HELP</span><button className="icon-plain help-close" aria-label="Close help" onClick={() => setHelpOpen(false)}>×</button></div>
+        <p className="help-intro">Design the workflow, connect the steps, then export a plugin for Claude Code or Codex.</p>
+        <span className="help-title">Shortcuts</span>
+        <ul className="help-shortcuts">
+          <li><kbd>Ctrl/⌘ B</kbd><span>Show or hide the Explorer</span></li>
+          <li><kbd>Right-click</kbd><span>Add a step or edit an arc</span></li>
+          <li><kbd>Double-click</kbd><span>Rename a step or arc</span></li>
+          <li><kbd>Drag</kbd><span>Connect two steps</span></li>
+        </ul>
+        <span className="help-title">Documentation</span>
+        <ul className="help-links">{HELP_LINKS.map(link => <li key={link.href}><a href={link.href} target="_blank" rel="noreferrer" onClick={() => setHelpOpen(false)}>{link.label}</a></li>)}</ul>
       </div>}</div></div>
     </header>
 
@@ -677,7 +725,7 @@ export default function App() {
               <button className="danger" role="menuitem" onClick={() => contextMenu.target?.kind === 'edge' && removeEdge(contextMenu.target.id, contextMenu.target.source, contextMenu.target.target)}><Unplug size={14} />Delete connection</button>
             </>}
           </div>}
-          <div className="line-style-toggle"><div className="line-style-options" role="radiogroup" aria-label="Line style">{LINE_STYLES.map(({ value, label, icon: Icon }) => <button key={value} type="button" role="radio" aria-checked={lineStyle === value} aria-label={label} title={label} className={lineStyle === value ? 'active' : ''} onClick={() => setLineStyle(value)}><Icon size={14} /></button>)}</div><span className="toolbar-separator" aria-hidden="true" /><button type="button" aria-label="Reorganize layout" title="Reorganize layout: arrange the steps along the flow, without overlaps, and fit them on screen. Click again for another arrangement" disabled={!Object.keys(workflow.nodes || {}).length} onClick={arrangeLayout}><RefreshCw size={14} /></button></div>
+          <div className="line-style-toggle"><button type="button" className="add-node-button" aria-label="Add node" title="Add a step node" disabled={!projectId || busy} onClick={addNodeFromToolbar}><Plus size={14} /></button><span className="toolbar-separator" aria-hidden="true" /><div className="line-style-options" role="radiogroup" aria-label="Line style">{LINE_STYLES.map(({ value, label, icon: Icon }) => <button key={value} type="button" role="radio" aria-checked={lineStyle === value} aria-label={label} title={label} className={lineStyle === value ? 'active' : ''} onClick={() => setLineStyle(value)}><Icon size={14} /></button>)}</div><span className="toolbar-separator" aria-hidden="true" /><button type="button" aria-label="Reorganize layout" title="Reorganize layout: arrange the steps along the flow, without overlaps, and fit them on screen. Click again for another arrangement" disabled={!Object.keys(workflow.nodes || {}).length} onClick={arrangeLayout}><RefreshCw size={14} /></button></div>
           <div className="canvas-hint">Drag nodes to arrange · Connect handles to add transitions</div>
         </div>
 
