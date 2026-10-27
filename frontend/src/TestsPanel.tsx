@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { CircleCheckBig, CircleX, FlaskConical, Play, Save } from 'lucide-react'
 import { api, post, put } from './api'
+import { FONT_MONO, TEXT } from './typography'
 
 type ScenarioResult = { name: string; passed: boolean; status: string; path: string[]; final?: string; error?: string; mismatches: string[] }
 type TestRun = { total: number; passed: number; failed: number; results: ScenarioResult[] }
@@ -56,7 +57,7 @@ export function TestsPanel({ projectId, labels, onClose, onHighlight, onSaved }:
       </div>
     </header>
     <p className="tests-intro">Script the result of each step and the path you expect. Runs are simulated with the same rules as the exported plugin, without any agent.</p>
-    <div className="tests-editor"><Editor height="100%" language="yaml" theme="vs-light" value={source} onChange={value => { setSource(value || ''); setSaved(false) }} options={{ minimap: { enabled: false }, fontSize: 12.5, scrollBeyondLastLine: false, tabSize: 2, wordWrap: 'on' }} /></div>
+    <div className="tests-editor"><Editor height="100%" language="yaml" theme="vs-light" value={source} onChange={value => { setSource(value || ''); setSaved(false) }} options={{ minimap: { enabled: false }, fontSize: TEXT.body, fontFamily: FONT_MONO, scrollBeyondLastLine: false, tabSize: 2, wordWrap: 'on' }} /></div>
     <div className="tests-results" aria-live="polite">
       {error && <p className="tests-error">{error}</p>}
       {!run && !error && <p className="helper"><FlaskConical size={13} /> Run the scenarios to see which pass.</p>}

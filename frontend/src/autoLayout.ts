@@ -217,8 +217,9 @@ export function autoLayout(nodes: Record<string, LayoutNode>, start: string, vie
 
 /** Rough on-screen size of an arc label: its text and, above it, the step's question (two lines at most). */
 export function estimateLabelSize(text: string, question?: string): LabelSize {
-  const textWidth = text ? text.length * 6.4 : 0
-  const questionWidth = question ? Math.min(170, question.length * 5.4) : 0
-  const questionLines = question ? (question.length * 5.4 > 170 ? 2 : 1) : 0
-  return { width: Math.max(textWidth, questionWidth) + 12, height: 18 + questionLines * 12 }
+  // Matches --text-small (arc label) and --text-micro (arc question) in style.css.
+  const textWidth = text ? text.length * 7 : 0
+  const questionWidth = question ? Math.min(170, question.length * 6) : 0
+  const questionLines = question ? (question.length * 6 > 170 ? 2 : 1) : 0
+  return { width: Math.max(textWidth, questionWidth) + 12, height: 19 + questionLines * 14 }
 }

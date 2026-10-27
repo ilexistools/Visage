@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The editor follows one type scale: `style.css` defines `--text-micro` (11px), `--text-small` (12px), `--text-body` (13px), `--text-emphasis` (14px), `--text-title` (16px) and `--text-heading` (18px), and every label, button, field, menu, step title and hint uses one of them. Arc labels, the Monaco editors and React Flow's attribution are on the same scale. Text that used to be 9–10.5px is no longer below 11px, and a test fails if the stylesheet gains an ad-hoc pixel size again.
+
 ### Fixed
 
 - Postconditions now run on Windows: the runner expands `$NAME`, `${NAME}` and `%NAME%` from the environment before the shell sees the command, so the documented `node "$VISAGE_SHARED_DIR/references/check.mjs"` no longer fails there (cmd.exe leaves `$NAME` alone).
